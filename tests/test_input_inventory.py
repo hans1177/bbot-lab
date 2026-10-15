@@ -174,3 +174,33 @@ class ExportInputTests(InputFixture, unittest.TestCase):
         result, _ = self.export()
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue(folder.is_dir())
+
+    def test_runtime_fill_uuid_preserved_without_token_false_positive(self):
+        import zipfile
+        self.fixture()
+        name = 'strategy_lab/results/v3/runtime_feedback.json'
+        payload = {'schema': 'B_BOT_R4_RUNTIME_RESEARCH_FEEDBACK_V1', 'records': [{'exit_fill_ids': ['123456789:12345678-1234-1234-1234-123456789abc']} ]}
+        raw = json.dumps(payload).encode()
+        (self.root / name).write_bytes(raw)
+        result, destination = self.export()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(destination) as archive:
+            self.assertEqual(archive.read(name), raw)
+        self.assertEqual((self.root / name).read_bytes(), raw)
+
+    def test_token_in_fill_id_still_blocked(self):
+        self.fixture()
+        payload = {'schema': 'B_BOT_R4_RUNTIME_RESEARCH_FEEDBACK_V1', 'records': [{'exit_fill_ids': ['123456789:' + 'B' * 35]}]}
+        (self.root / 'strategy_lab/results/v3/runtime_feedback.json').write_text(json.dumps(payload))
+        result, destination = self.export()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('EXPORT_CREDENTIAL_PATTERN_DETECTED:strategy_lab/results/v3/runtime_feedback.json:RULE_4', result.stderr)
+        self.assertFalse(destination.exists())
+
+    def test_token_elsewhere_in_feedback_still_blocked(self):
+        self.fixture()
+        payload = {'schema': 'B_BOT_R4_RUNTIME_RESEARCH_FEEDBACK_V1', 'records': [{'exit_fill_ids': ['123456789:12345678-1234-1234-1234-123456789abc'], 'detail': '123456789:' + 'B' * 35}]}
+        (self.root / 'strategy_lab/results/v3/runtime_feedback.json').write_text(json.dumps(payload))
+        result, destination = self.export()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(destination.exists())

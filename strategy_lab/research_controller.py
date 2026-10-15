@@ -774,9 +774,26 @@ def managed_dry_run(include_inputs: bool = False, export_inputs=None) -> dict:
                     signature = (before.st_size, before.st_mtime_ns, before.st_ino)
                     if signature != (after.st_size, after.st_mtime_ns, after.st_ino) or len(raw) != before.st_size:
                         raise RuntimeError('EXPORT_INPUT_CHANGED_RETRY')
-                    if path.suffix.lower() in {'.py', '.json', '.jsonl', '.csv'} and any(re.search(pattern, raw) for pattern in patterns):
-                        raise RuntimeError('EXPORT_CREDENTIAL_PATTERN_DETECTED')
                     relative = path.relative_to(ROOT).as_posix()
+                    scan_raw = raw
+                    # R4 청산 체결 ID의 숫자:UUID 전체 형식만 검사 뷰에서 구분한다.
+                    # 압축에 저장하는 원본 바이트와 연구 증거는 변경하지 않는다.
+                    if relative == 'strategy_lab/results/v3/runtime_feedback.json':
+                        feedback = json.loads(raw.decode('utf-8-sig'))
+                        if isinstance(feedback, dict) and feedback.get('schema') == 'B_BOT_R4_RUNTIME_RESEARCH_FEEDBACK_V1':
+                            for record in feedback.get('records') or []:
+                                if not isinstance(record, dict) or not isinstance(record.get('exit_fill_ids'), list):
+                                    continue
+                                for index, value in enumerate(record['exit_fill_ids']):
+                                    if isinstance(value, str) and re.fullmatch(r'[0-9]{1,20}:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', value):
+                                        record['exit_fill_ids'][index] = 'VERIFIED_R4_FILL_EVENT_ID'
+                            scan_raw = json.dumps(feedback, ensure_ascii=False).encode('utf-8')
+                    if path.suffix.lower() in {'.py', '.json', '.jsonl', '.csv'}:
+                        for pattern_index, pattern in enumerate(patterns):
+                            match = re.search(pattern, scan_raw)
+                            if match:
+                                # 파일 경로와 종류만 반환하고 탐지된 값은 노출하지 않는다.
+                                raise RuntimeError('EXPORT_CREDENTIAL_PATTERN_DETECTED:' + relative + ':RULE_' + str(pattern_index + 1))
                     archive.writestr(relative, raw)
                     manifest['files'][relative] = {'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
                     fingerprints[path] = signature
