@@ -81,12 +81,15 @@ class InputInventoryTests(InputFixture, unittest.TestCase):
 
 class ExportInputTests(InputFixture, unittest.TestCase):
     def tearDown(self):
-        Path(self.temp.name + '.zip').unlink(missing_ok=True)
+        Path(self.temp.name + '-parts.zip').unlink(missing_ok=True)
+        shutil.rmtree(self.temp.name + '-parts', ignore_errors=True)
         super().tearDown()
 
-    def export(self):
-        destination = Path(self.temp.name + '.zip')
+    def export(self, split_bytes=None):
+        destination = Path(self.temp.name + '-parts.zip')
         env = dict(os.environ, BBOT_LOCAL_ROOT=str(self.root), PYTHONDONTWRITEBYTECODE='1')
+        if split_bytes is not None:
+            env['BBOT_EXPORT_PART_BYTES'] = str(split_bytes)
         result = subprocess.run([sys.executable, '-B', str(REPO / 'strategy_lab/research_controller.py'), '--mode', 'managed-dry-run', '--export-inputs', str(destination)], env=env, capture_output=True, text=True, timeout=20)
         return result, destination
 
@@ -110,7 +113,7 @@ class ExportInputTests(InputFixture, unittest.TestCase):
 
     def test_existing_archive_never_overwritten(self):
         self.fixture()
-        destination = Path(self.temp.name + '.zip')
+        destination = Path(self.temp.name + '-parts.zip')
         destination.write_bytes(b'existing archive')
         result, _ = self.export()
         self.assertNotEqual(result.returncode, 0)
@@ -135,3 +138,39 @@ class ExportInputTests(InputFixture, unittest.TestCase):
             self.assertEqual(result.returncode, 3, result.stderr)
             self.assertEqual(json.loads(result.stdout)['reason'], 'RESEARCH_ALREADY_RUNNING')
             self.assertFalse(destination.exists())
+
+    def test_split_transfer_round_trip_and_hashes(self):
+        import io
+        import zipfile
+        self.fixture()
+        (self.root / 'data/candles/incompressible.parquet').write_bytes(os.urandom(2 * 1024**2 + 10000))
+        result, destination = self.export(split_bytes=1024**2)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        folder = destination.with_suffix('')
+        try:
+            self.assertFalse(destination.exists())
+            transfer = json.loads((folder / 'TRANSFER.json').read_text())
+            self.assertFalse(transfer['public_upload_allowed'])
+            self.assertGreater(len(transfer['parts']), 1)
+            combined = bytearray()
+            for part in transfer['parts']:
+                raw = (folder / part['name']).read_bytes()
+                self.assertLessEqual(len(raw), 1024**2)
+                self.assertEqual(hashlib.sha256(raw).hexdigest(), part['sha256'])
+                combined.extend(raw)
+            self.assertEqual(hashlib.sha256(combined).hexdigest(), transfer['archive_sha256'])
+            with zipfile.ZipFile(io.BytesIO(combined)) as archive:
+                manifest = json.loads(archive.read('HANDOFF.json'))
+                for name, row in manifest['files'].items():
+                    self.assertEqual(hashlib.sha256(archive.read(name)).hexdigest(), row['sha256'])
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_existing_split_directory_preserved(self):
+        self.fixture()
+        folder = Path(self.temp.name + '-parts')
+        folder.mkdir()
+        (folder / 'keep.txt').write_text('keep')
+        result, _ = self.export()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(folder.is_dir())

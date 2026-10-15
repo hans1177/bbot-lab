@@ -735,12 +735,14 @@ def managed_dry_run(include_inputs: bool = False, export_inputs=None) -> dict:
             raise RuntimeError('EXPORT_INPUT_CHECK_REQUIRED')
         if destination.suffix.lower() != '.zip' or destination.is_relative_to(ROOT.resolve()):
             raise ValueError('EXPORT_OUTSIDE_RESEARCH_ROOT_ZIP_REQUIRED')
-        if destination.exists():
+        split_destination = destination.with_suffix('')
+        if destination.exists() or split_destination.exists():
             raise FileExistsError('EXPORT_DESTINATION_ALREADY_EXISTS')
         if not destination.parent.is_dir():
             raise FileNotFoundError('EXPORT_PARENT_MISSING')
         paths = {ROOT / name for name in required}
-        paths.update(candles)
+        candle_paths = set(candles)
+        paths.update(candle_paths)
         paths.update(p for p in LAB.rglob('*') if p.is_file() and p.suffix.lower() in {'.py', '.json', '.jsonl', '.csv', '.parquet'} and not any(part in {'__pycache__', '.git', '.venv', 'server_runtime', 'logs'} for part in p.relative_to(LAB).parts) and p.name != 'server_exchange_snapshot.json')
         total = sum(p.stat().st_size for p in paths)
         if total > 4 * 1024**3:
@@ -757,8 +759,9 @@ def managed_dry_run(include_inputs: bool = False, export_inputs=None) -> dict:
                     'public_upload_allowed': False, 'automatic_promotion': False,
                     'orders_touched': False, 'files': {}}
         fingerprints = {}
+        split_stage = None
         try:
-            with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+            with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
                 for path in sorted(paths):
                     resolved = path.resolve()
                     if path.is_symlink() or not resolved.is_relative_to(ROOT.resolve()):
@@ -777,22 +780,62 @@ def managed_dry_run(include_inputs: bool = False, export_inputs=None) -> dict:
                     archive.writestr(relative, raw)
                     manifest['files'][relative] = {'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
                     fingerprints[path] = signature
-                    if archive.fp.tell() > 450 * 1024**2:
-                        raise RuntimeError('EXPORT_COMPRESSED_SIZE_EXCEEDS_450_MIB')
+                    # 시세는 수집기가 별도로 갱신한다. 각 파일의 읽기 전후 상태와
+                    # 압축에 담은 실제 바이트 해시를 보존한다.
                 for path, signature in fingerprints.items():
+                    if path in candle_paths:
+                        continue
                     current = path.stat()
                     if signature != (current.st_size, current.st_mtime_ns, current.st_ino):
                         raise RuntimeError('EXPORT_INPUT_CHANGED_RETRY')
                 archive.writestr('HANDOFF.json', json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
             size = Path(temporary).stat().st_size
-            if size > 450 * 1024**2:
-                raise RuntimeError('EXPORT_COMPRESSED_SIZE_EXCEEDS_450_MIB')
-            os.link(temporary, destination)
-            result['export'] = {'path': str(destination), 'bytes': size, 'files': len(manifest['files']),
-                                'created': True, 'public_upload_allowed': False,
+            # 전체 ZIP 바이트를 나누므로 연구 파일이나 기록을 생략하지 않는다.
+            part_limit = int(os.getenv('BBOT_EXPORT_PART_BYTES') or 200 * 1024**2)
+            if not 1024**2 <= part_limit <= 200 * 1024**2:
+                raise ValueError('EXPORT_PART_LIMIT_INVALID')
+            outputs = []
+            if size <= part_limit:
+                os.link(temporary, destination)
+                outputs = [str(destination)]
+                final_path = destination
+            else:
+                import shutil
+                split_stage = Path(tempfile.mkdtemp(prefix='.research-parts-', dir=str(destination.parent)))
+                transfer = {'schema': 'B_BOT_RESEARCH_TRANSFER_PARTS_V1',
+                            'archive_name': destination.name, 'archive_bytes': size,
+                            'public_upload_allowed': False, 'parts': []}
+                archive_hash = hashlib.sha256()
+                with Path(temporary).open('rb') as stream:
+                    index = 1
+                    while True:
+                        block = stream.read(part_limit)
+                        if not block:
+                            break
+                        name = destination.name + '.' + str(index).zfill(3)
+                        (split_stage / name).write_bytes(block)
+                        archive_hash.update(block)
+                        transfer['parts'].append({'name': name, 'bytes': len(block), 'sha256': hashlib.sha256(block).hexdigest()})
+                        index += 1
+                transfer['archive_sha256'] = archive_hash.hexdigest()
+                (split_stage / 'TRANSFER.json').write_text(json.dumps(transfer, indent=2, sort_keys=True), encoding='utf-8')
+                # 연구 폴더 밖의 새 디렉터리로만 게시한다. 기존 파일은 보존한다.
+                if split_destination.exists():
+                    raise FileExistsError('EXPORT_DESTINATION_ALREADY_EXISTS')
+                split_stage.rename(split_destination)
+                split_stage = None
+                final_path = split_destination
+                outputs = [str(split_destination / row['name']) for row in transfer['parts']]
+                outputs.append(str(split_destination / 'TRANSFER.json'))
+            result['export'] = {'path': str(final_path), 'bytes': size, 'files': len(manifest['files']),
+                                'created': True, 'outputs': outputs, 'public_upload_allowed': False,
                                 'source_files_modified': False, 'server_write': False}
         finally:
             Path(temporary).unlink(missing_ok=True)
+            if split_stage is not None:
+                import shutil
+                shutil.rmtree(split_stage)
+
     return result
 
 
