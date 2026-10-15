@@ -1,0 +1,30 @@
+name: Research engineering checks
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: research-engineering-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-research-test.txt
+      - run: python -W ignore::FutureWarning -m unittest discover -s tests -v
+      - name: Existing controller preparation check
+        env:
+          BBOT_LOCAL_ROOT: ${{ github.workspace }}
+        run: |
+          python strategy_lab/research_controller.py --mode managed-dry-run --skip-server-health > /tmp/preflight.json
+          python -c "import json; r=json.load(open('/tmp/preflight.json')); assert r['ok'] and r['mutated'] is False and r['orders_touched'] is False; print('CONTROLLER_PREFLIGHT_OK')"

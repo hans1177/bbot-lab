@@ -1,0 +1,1004 @@
+# -*- coding: utf-8 -*-
+# 파일명: strategy_lab/research_controller.py
+"""B-Bot V3 거버넌스형 bounded 연구 Controller.
+
+Roadmap Constitution 안에서만 연구하며 Stable Trading Kernel은 자동 수정하지 않는다.
+실제 전략/정책 교체는 검증된 Version + Strategy Runtime Sync를 통해서만 진행한다.
+"""
+from __future__ import annotations
+
+# ============================================================
+# 임포트
+# ============================================================
+
+import argparse
+import json
+import os
+import sys
+import time
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+
+try:
+    import msvcrt
+except Exception:
+    msvcrt = None
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
+# ============================================================
+# 경로 / 모듈
+# ============================================================
+
+ROOT = Path(os.getenv("BBOT_LOCAL_ROOT", r"C:\my\bottest"))
+LAB = ROOT / "strategy_lab"
+RES = LAB / "results"
+V3 = RES / "v3"
+LOCK = V3 / "research_controller.lock"
+PENDING = V3 / "runtime_sync_request.json"
+PUSH_HOLD = ROOT / "SERVER_PUSH_HOLD.flag"
+
+sys.path.insert(0, str(LAB))
+
+import v3_baseline_research as baseline_research
+import v3_challenger_research as challenger_research
+import v3_combination_research as combination_research
+import v3_deployment as deploy
+import v3_evidence_research as evidence_research
+import v3_governance as governance
+import v3_hypothesis_factory as hypothesis_factory
+import v3_policy_research as policy_research
+import v3_research_knowledge as knowledge
+import v3_strategy_research as strategy_research
+import v3_task_queue as task_queue
+
+# ============================================================
+# 상수
+# ============================================================
+
+MAIN_FILL_TF_ORDER = ["30M", "1H", "6H", "12H", "1D", "1W"]
+RESEARCH_TF_ORDER = ["6H", "1H", "1D", "1W", "30M", "12H"]
+DEPLOY_TF_ORDER = ["30M", "1H", "6H", "12H", "1D", "1W"]
+
+# ============================================================
+# 유틸 / 락
+# ============================================================
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def load(path: Path, default):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except Exception:
+        return default
+
+
+@contextmanager
+def lock():
+    """기존 연구 잠금을 Windows와 Linux에서 동일하게 배타적으로 획득한다."""
+    LOCK.parent.mkdir(parents=True, exist_ok=True)
+    f = LOCK.open("a+b")
+    acquired = False
+    try:
+        if os.name == "nt":
+            if msvcrt is None:
+                raise RuntimeError("RESEARCH_LOCK_BACKEND_UNAVAILABLE")
+            f.seek(0)
+            f.write(b"0")
+            f.flush()
+            f.seek(0)
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as error:
+                raise RuntimeError("RESEARCH_ALREADY_RUNNING") from error
+        else:
+            if fcntl is None:
+                raise RuntimeError("RESEARCH_LOCK_BACKEND_UNAVAILABLE")
+            try:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise RuntimeError("RESEARCH_ALREADY_RUNNING") from error
+        acquired = True
+        yield
+    finally:
+        try:
+            if acquired:
+                if os.name == "nt":
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        finally:
+            f.close()
+
+
+def config() -> dict:
+    return load(ROOT / "strategy_config.json", {})
+
+
+def research_architecture() -> dict:
+    arch = (
+        governance.constitution()
+        .get("research_architecture_v3")
+        or {}
+    )
+
+    if arch.get("policy_id") != (
+        "RA_MAIN_MIDDLE_DETAIL_20260830_V1"
+    ):
+        raise RuntimeError(
+            "RESEARCH_ARCHITECTURE_INVALID"
+        )
+
+    return arch
+
+
+def research_scheduler() -> dict:
+    scheduler = (
+        research_architecture()
+        .get("research_scheduler")
+        or {}
+    )
+
+    if scheduler.get("status") != (
+        "FINAL_CONFIRMED"
+    ):
+        raise RuntimeError(
+            "RESEARCH_SCHEDULER_INVALID"
+        )
+
+    return scheduler
+
+
+def frame_live(tf: str) -> bool:
+    row = ((config().get("frames") or {}).get(tf) or {})
+    return bool(row.get("enabled")) and str(row.get("deployment_tier") or "OFF").upper() in {"CANARY", "SMALL", "NORMAL"}
+
+
+def can_accept_canary_peer(tf: str) -> bool:
+    tf = str(tf or "").upper()
+
+    s = deploy.state() or {}
+
+    count = 0
+
+    for row in (
+        s.get("strategy_instances")
+        or {}
+    ).values():
+
+        if not isinstance(row, dict):
+            continue
+
+        if str(
+            row.get("timeframe")
+            or ""
+        ).upper() != tf:
+            continue
+
+        tier = str(
+            row.get("tier")
+            or ""
+        ).upper()
+
+        qualification = str(
+            row.get("qualification_status")
+            or ""
+        ).upper()
+
+        if (
+            tier in {
+                "PENDING_SHADOW",
+                "LOCAL_PROVISIONAL_READY",
+                "PENDING_CANARY_SYNC",
+                "CANARY",
+            }
+            or qualification == "CANARY"
+        ):
+            count += 1
+
+    return count < 8
+
+
+def candidate_already_tracked(
+    tf: str,
+    row: dict,
+) -> bool:
+
+    tf = str(tf or "").upper()
+
+    strategy = str(
+        (row or {}).get("strategy")
+        or ""
+    ).upper()
+
+    if not strategy:
+        return True
+
+    s = deploy.state() or {}
+
+    for inst in (
+        s.get("strategy_instances")
+        or {}
+    ).values():
+
+        if not isinstance(inst, dict):
+            continue
+
+        if str(
+            inst.get("timeframe")
+            or ""
+        ).upper() != tf:
+            continue
+
+        if str(
+            inst.get("strategy")
+            or inst.get("strategy_id")
+            or ""
+        ).upper() != strategy:
+            continue
+
+        tier = str(
+            inst.get("tier")
+            or ""
+        ).upper()
+
+        if tier not in {
+            "",
+            "ROLLED_BACK",
+            "REJECTED",
+            "FAILED",
+        }:
+            return True
+
+    return False
+
+
+MAIN_FILL_OCCUPIED_TIERS = {
+    "LOCAL_PROVISIONAL_READY",
+    "PENDING_CANARY_SYNC",
+    "CANARY",
+    "SMALL",
+    "NORMAL",
+}
+
+
+def main_fill_occupied(tf: str) -> bool:
+    row=((deploy.state().get("frames") or {}).get(tf) or {})
+    strategy=str(row.get("strategy") or "").strip()
+    tier=str(
+        row.get("tier")
+        or row.get("deployment_tier")
+        or ""
+    ).upper()
+
+    if strategy and tier in MAIN_FILL_OCCUPIED_TIERS:
+        return True
+
+    return frame_live(tf)
+
+
+def empty_main_fill_tfs():
+    # Dynamic deployment state only; no fixed winning timeframe.
+    #
+    # Existing deployed CANARY/SMALL/NORMAL instances remain untouched
+    # for runtime/position management.  Research fill priority, however,
+    # must also include frames whose currently deployed exact version has
+    # already failed/superseded in the current validation pipeline.
+    pipeline_path = (
+        ROOT
+        / "strategy_lab"
+        / "results"
+        / "v3"
+        / "historical_314_pipeline_stage2.json"
+    )
+
+    pipeline = load(pipeline_path, {})
+    entries = pipeline.get("entries") or []
+
+    research_refill_stages = {
+        "REDEVELOPMENT_SUPERSEDED_BY_NEW_VERSION",
+        "HARD_PASS_RECHECK_FAIL",
+        "HARD_PASS_FAIL",
+    }
+
+    out = []
+
+    state = deploy.state() or {}
+    frames = state.get("frames") or {}
+
+    for tf in MAIN_FILL_TF_ORDER:
+        if not main_fill_occupied(tf):
+            out.append(tf)
+            continue
+
+        frame = frames.get(tf) or {}
+        deployed_exact = str(
+            frame.get("strategy_version")
+            or ""
+        ).strip()
+
+        if not deployed_exact:
+            continue
+
+        matched = [
+            row
+            for row in entries
+            if isinstance(row, dict)
+            and str(row.get("timeframe") or "").upper() == tf
+            and str(row.get("exact_strategy_version") or "").strip()
+                == deployed_exact
+        ]
+
+        if len(matched) != 1:
+            continue
+
+        stage = str(
+            matched[0].get("pipeline_stage")
+            or ""
+        ).upper()
+
+        if stage in research_refill_stages:
+            out.append(tf)
+
+    return out
+
+
+
+
+def _record_strategy_track(event: str, result: dict) -> None:
+    task = {
+        "task_id": f"STRATEGY_{event}_{int(time.time())}",
+        "track": "STRATEGY",
+        "input_signature": task_queue.input_signature("STRATEGY"),
+        "contract": task_queue.task_contract("STRATEGY"),
+    }
+
+    status = str(
+        result.get("status")
+        or "MEASURED"
+    ).upper()
+
+    mapped = (
+        status
+        if status in {
+            "PASS",
+            "FAIL",
+            "MEASURED",
+            "CANDIDATE",
+            "VALIDATED",
+        }
+        else "MEASURED"
+    )
+
+    task_queue.record(
+        task,
+        {
+            "status": mapped,
+            "event": event,
+            "summary": result,
+        },
+    )
+
+    # Strategy Passport only when exact version exists.
+    version_id = str(
+        result.get("strategy_version")
+        or result.get("version_id")
+        or ""
+    ).strip()
+
+    if not version_id.startswith("SV_"):
+        return
+
+    timeframe = str(
+        result.get("timeframe")
+        or result.get("tf")
+        or ""
+    ).upper()
+
+    strategy = (
+        result.get("strategy")
+        or result.get("strategy_name")
+    )
+
+    governance.ensure_strategy_passport(
+        version_id,
+        {
+            "timeframe": timeframe,
+            "strategy": strategy,
+            "source": "research_controller",
+        },
+    )
+
+    governance.record_strategy_career_event(
+        version_id,
+        "RESEARCH",
+        {
+            "source_event": event,
+            "research_status": mapped,
+            "timeframe": timeframe,
+            "strategy": strategy,
+            "result_json": result.get("result_json"),
+            "checkpoint": result.get("checkpoint"),
+        },
+        event_id=task["task_id"] + ":" + version_id,
+    )
+
+
+# ============================================================
+# 상태
+# ============================================================
+
+
+def controller_status() -> dict:
+    cfg = config()
+    ds = deploy.state()
+    rs = strategy_research.status()
+    cv = governance.validate_constitution()
+
+    arch = research_architecture()
+    scheduler = research_scheduler()
+
+    return {
+        "schema":
+            "B_BOT_V3_CONTROLLER_STATUS_V3",
+
+        "updated_at":
+            now(),
+
+        "pending_runtime_sync":
+            PENDING.exists(),
+
+        "server_push_hold":
+            PUSH_HOLD.exists(),
+
+        "constitution":
+            cv,
+
+        "research_architecture_v3": {
+            "policy_id":
+                arch.get("policy_id"),
+            "status":
+                arch.get("status"),
+            "MAIN":
+                (arch.get("MAIN") or {})
+                .get("stages"),
+            "MIDDLE":
+                (arch.get("MIDDLE") or {})
+                .get("stages"),
+            "DETAIL":
+                (arch.get("DETAIL") or {})
+                .get("stages"),
+        },
+
+        "research_scheduler": {
+            "schema":
+                scheduler.get("schema"),
+            "status":
+                scheduler.get("status"),
+            "resource_allocation":
+                task_queue.resource_allocation(),
+        },
+
+        "roadmap_queue":
+            task_queue.status(),
+
+        "frames": {
+            tf: {
+                "runtime":
+                    (cfg.get("frames") or {})
+                    .get(tf),
+
+                "deployment":
+                    (ds.get("frames") or {})
+                    .get(tf),
+
+                "research":
+                    (rs.get("timeframes") or {})
+                    .get(tf),
+            }
+
+            for tf in RESEARCH_TF_ORDER
+        },
+
+        "trial73":
+            "COMPLETED_DO_NOT_RERUN",
+
+        "legacy_trial_counters": {
+            "search":
+                73,
+            "parameter":
+                73,
+        },
+
+        "v3_trial_counter":
+            knowledge.ensure()[1]
+            .get("counter", 0),
+
+        "version_registry":
+            governance.version_registry(),
+    }
+
+
+
+# ============================================================
+# Bounded Controller 1회
+# ============================================================
+
+
+
+
+def _new_research_available():
+    if strategy_research.choose_next(): return True
+    if hypothesis_factory.choose_next(): return True
+    for tf in strategy_research.TF_ORDER:
+        try:
+            if combination_research.hypotheses(tf): return True
+        except Exception:
+            continue
+    search = config().get("candidate_search") or {}
+    if search.get("enabled") is True:
+        contract = search.get("contract") or {}
+        tf = str(contract.get("timeframe") or "").upper()
+        knowledge_state, _ = knowledge.ensure()
+        checkpoint = (knowledge_state.get("records") or {}).get("candidate_search_wave:" + tf) or {}
+        if checkpoint.get("run_id") != contract.get("run_id"):
+            return True
+        import v3_memory_hypothesis_wave as candidate_wave
+        manifest = candidate_wave.wave(tf, search_contract=contract)
+        done = hypothesis_factory.completed_pairs()
+        return any((str(row.get("name") or "").upper(), tf) not in done for row in manifest.get("candidates") or [])
+    return False
+
+
+def _run_new_research_one(held):
+    nxt=strategy_research.choose_next()
+    if nxt:
+        row=strategy_research.run_one(); _record_strategy_track("AUTO_MANAGER_SINGLE_FIXED_WINDOW",row); return {"status":"DONE","action":"SINGLE_RESEARCH","result":row}
+    nxt=hypothesis_factory.choose_next()
+    if nxt:
+        row=hypothesis_factory.run_one(); _record_strategy_track("AUTO_MANAGER_SAFE_GRAMMAR_FIXED_WINDOW",row); return {"status":"DONE","action":"SAFE_GRAMMAR_RESEARCH","result":row}
+    try:
+        tf=combination_research.choose_next_tf()
+    except Exception:
+        tf=None
+    if tf:
+        row=combination_research.run_one(tf); _record_strategy_track("AUTO_MANAGER_COMBINATION_FIXED_WINDOW",row if isinstance(row,dict) else {"status":"MEASURED"}); return {"status":"DONE","action":"COMBINATION_RESEARCH","timeframe":tf,"result":row}
+    search = config().get("candidate_search") or {}
+    if search.get("enabled") is True:
+        import v3_memory_hypothesis_wave as candidate_wave
+        contract = search.get("contract") or {}
+        tf = str(contract.get("timeframe") or "").upper()
+        manifest = candidate_wave.wave(tf, search_contract=contract)
+        done = hypothesis_factory.completed_pairs()
+        pending = [row for row in manifest["candidates"] if (str(row["name"]).upper(), tf) not in done]
+        if pending:
+            row = hypothesis_factory.run_one(candidate=pending[0])
+            _record_strategy_track("AUTO_MANAGER_GENETIC_OPTUNA_FIXED_WINDOW", row)
+            return {"status": "DONE", "action": "SEALED_SEARCH_CANDIDATE_RESEARCH", "result": row,
+                    "wave_id": manifest["wave_id"], "automatic_promotion": False}
+    return {"status":"NO_NEW_RESEARCH_BACKLOG"}
+
+
+def _managed_availability(work):
+    new_avail=_new_research_available(); redev=work.get("redevelopment_pending",0)>0
+    if work.get("historical_backlog_mode"):
+        return {
+            "HISTORICAL_314_PIPELINE": bool(work.get("hard_pass_pending") or work.get("reentry_pending") or work.get("final_risk_pending")),
+            "INDIVIDUAL_TRAILING": bool(work.get("trailing_pending")),
+            "NEW_PURE_AND_HARD_PASS": new_avail,
+            "TARGETED_REDEVELOPMENT": redev,
+            "FULL_VALIDATION_AND_BLIND": bool(work.get("full_validation_pending") or work.get("blind_prepare_pending") or work.get("blind_evaluation_pending")),
+        }
+    return {
+        "NEW_PURE_AND_HARD_PASS":new_avail,
+        "ENTRY_AND_FINAL_RISK":bool(work.get("hard_pass_pending") or work.get("final_risk_pending")),
+        "TRAILING_AND_REENTRY":bool(work.get("trailing_pending") or work.get("reentry_pending")),
+        "FULL_VALIDATION":bool(work.get("full_validation_pending")),
+        "TARGETED_REDEVELOPMENT":redev,
+        "SEALED_FINAL_BLIND":bool(work.get("blind_prepare_pending") or work.get("blind_evaluation_pending")),
+    }
+
+
+def _dispatch_managed_bucket(bucket, work, held):
+    # ?? ??? ?? ??? ???? ??? ??? ??? ?? ????.
+    if bucket == "NEW_PURE_AND_HARD_PASS":
+        return _run_new_research_one(held)
+
+    if bucket in {"HISTORICAL_314_PIPELINE", "ENTRY_AND_FINAL_RISK"}:
+        if work.get("final_risk_pending"):
+            return strategy_research.run_final_risk_one()
+        if bucket == "HISTORICAL_314_PIPELINE" and work.get("reentry_pending"):
+            return strategy_research.run_individual_reentry_one()
+        if work.get("hard_pass_pending"):
+            return strategy_research.run_historical_reentry_one()
+
+    if bucket in {"INDIVIDUAL_TRAILING", "TRAILING_AND_REENTRY"}:
+        if work.get("reentry_pending"):
+            return strategy_research.run_individual_reentry_one()
+        if work.get("trailing_pending"):
+            return strategy_research.run_individual_trailing_one()
+
+    if bucket == "TARGETED_REDEVELOPMENT":
+        return strategy_research.run_targeted_redevelopment_one()
+
+    if bucket in {"FULL_VALIDATION", "FULL_VALIDATION_AND_BLIND"} and work.get("full_validation_pending"):
+        return strategy_research.run_full_validation_one()
+
+    if bucket in {"SEALED_FINAL_BLIND", "FULL_VALIDATION_AND_BLIND"}:
+        if work.get("blind_prepare_pending"):
+            return strategy_research.prepare_sealed_final_blind_one()
+        if work.get("blind_evaluation_pending"):
+            return strategy_research.run_sealed_final_blind_one()
+
+    return {"status": "NO_WORK_FOR_SELECTED_BUCKET", "bucket": bucket}
+
+
+def managed_research_once(held: bool) -> dict:
+    if not held: return {"action":"GOVERNANCE_BLOCK","reason":"AUTO_RESEARCH_SERVER_PUSH_HOLD_REQUIRED"}
+    sync=strategy_research.sync_new_pipeline_entries(); work=strategy_research.pipeline_work_status(); availability=_managed_availability(work)
+    selection=task_queue.preview_auto_research_bucket(availability,bool(work.get("historical_backlog_mode")))
+    if selection is None:
+        task=task_queue.select_next(exclude={"STRATEGY"})
+        if task:
+            started=time.perf_counter(); row=policy_research.run_task(task); elapsed=time.perf_counter()-started
+            return {"action":"LEGACY_POLICY_MAINTENANCE_NO_UNIFIED_BACKLOG","server_push_hold":held,"track":task.get("track"),"task":task,"result":row,"elapsed_seconds":elapsed,"pipeline_sync":sync,"pipeline_work":work}
+        return {"action":"NO_NEW_BOUNDED_INPUT","server_push_hold":held,"pipeline_sync":sync,"pipeline_work":work,"manager":task_queue.auto_research_manager_status()}
+    started=time.perf_counter(); row=_dispatch_managed_bucket(selection["bucket"],work,held); elapsed=time.perf_counter()-started
+    task_queue.record_auto_research_bucket(selection,elapsed,row if isinstance(row,dict) else {"status":"UNKNOWN"})
+    return {"action":"AUTO_RESEARCH_MANAGER_STAGE10","server_push_hold":held,"selection":selection,"elapsed_seconds":elapsed,"pipeline_sync":sync,"pipeline_work":work,"result":row,"automatic_promotion":False}
+
+
+def managed_dry_run() -> dict:
+    cv=governance.validate_constitution(); work=strategy_research.pipeline_work_status();
+    samples={
+        "backlog":task_queue.preview_auto_research_bucket({"HISTORICAL_314_PIPELINE":True,"INDIVIDUAL_TRAILING":True,"NEW_PURE_AND_HARD_PASS":True,"TARGETED_REDEVELOPMENT":True,"FULL_VALIDATION_AND_BLIND":True},True,{}),
+        "normal":task_queue.preview_auto_research_bucket({"NEW_PURE_AND_HARD_PASS":True,"ENTRY_AND_FINAL_RISK":True,"TRAILING_AND_REENTRY":True,"FULL_VALIDATION":True,"TARGETED_REDEVELOPMENT":True,"SEALED_FINAL_BLIND":True},False,{}),
+    }
+    return {"ok":bool(cv.get("ok")) and bool(samples["backlog"]) and bool(samples["normal"]),"constitution":cv,"pipeline_work":work,"scheduler_preview":samples,"manager_status":task_queue.auto_research_manager_status(),"mutated":False,"orders_touched":False}
+
+def run_once(enable_research: bool = True) -> dict:
+    constitution = governance.validate_constitution()
+    if not constitution.get("ok"):
+        return {"action": "GOVERNANCE_BLOCK", "reason": "ROADMAP_CONSTITUTION_INVALID", "detail": constitution}
+
+    # Bind every controller cycle to the final
+    # MAIN/MIDDLE/DETAIL Constitution + Research Scheduler.
+    architecture = research_architecture()
+    scheduler_contract = research_scheduler()
+
+    held = PUSH_HOLD.exists() or str(os.getenv("B_BOT_V3_SERVER_PUSH_HOLD") or "").strip()=="1"
+    kernel_before = governance.capture_kernel_guard()
+    result = None
+
+    if str(os.getenv("BBOT_AUTO_RESEARCH_MANAGER_V1") or "").strip()=="1" and enable_research:
+        result=managed_research_once(held)
+        governance.assert_kernel_unchanged(kernel_before)
+        return result
+
+    # 1) Runtime 전환은 HOLD 해제 뒤에만 materialize/scale/rollback한다.
+    if not held and not PENDING.exists():
+        ready = deploy.materialize_local_ready_request()
+        if ready:
+            result = {"action": "RUNTIME_SYNC_REQUEST_FROM_LOCAL_READY", "request": ready}
+        if result is None:
+            for tf in DEPLOY_TF_ORDER:
+                req = deploy.next_tier_request(tf)
+                if req:
+                    result = {
+                        "action": "RUNTIME_SYNC_REQUEST",
+                        "request": req,
+                    }
+                    break
+
+        # ----------------------------------------------------
+        # Policy Version Canary -> Small -> Normal / Rollback
+        # ----------------------------------------------------
+
+        if result is None:
+            req = deploy.next_policy_tier_request()
+
+            if req:
+                result = {
+                    "action": "POLICY_RUNTIME_SYNC_REQUEST",
+                    "request": req,
+                }
+
+    if result is None and PENDING.exists() and not held:
+        result = {"action": "WAIT_RUNTIME_SYNC", "request": load(PENDING, {})}
+
+    if result is None and not enable_research:
+        result = {"action": "STATUS_ONLY", "server_push_hold": held, "status": controller_status()}
+
+    # 2) 전체 bounded ENTRY SIGNAL pool이 끝난 TF만 PROVISIONAL 후보를 만든다.
+    if result is None:
+        for tf in MAIN_FILL_TF_ORDER:
+            if not can_accept_canary_peer(tf):
+                continue
+            best = strategy_research.provisional_choice(tf)
+            if (
+                best
+                and not candidate_already_tracked(
+                    tf,
+                    best,
+                )
+            ):
+                req = deploy.create_provisional_request(tf, best)
+                if req:
+                    result = {
+                        "action": "PROVISIONAL_LOCAL_READY" if req.get("local_only") else "PROVISIONAL_CANARY_REQUEST",
+                        "server_push_hold": held,
+                        "request": req,
+                    }
+                    break
+
+    if result is None:
+        for tf in MAIN_FILL_TF_ORDER:
+            if not can_accept_canary_peer(tf):
+                continue
+            combo = combination_research.provisional_choice(tf)
+            if (
+                combo
+                and not candidate_already_tracked(
+                    tf,
+                    combo,
+                )
+            ):
+                req = deploy.create_provisional_request(tf, combo)
+                if req:
+                    result = {
+                        "action": "PROVISIONAL_COMBO_LOCAL_READY" if req.get("local_only") else "PROVISIONAL_COMBO_CANARY_REQUEST",
+                        "server_push_hold": held,
+                        "request": req,
+                    }
+                    break
+
+    # EMPTY_MAIN_BOUNDED_COMBO_RECOVERY
+    # MAIN-empty frames receive the next finite promotion-eligible
+    # combination research opportunity before Mutation/background work.
+    # Evaluation/ranking/holdout/deployment contracts remain unchanged.
+    if result is None:
+        for tf in empty_main_fill_tfs():
+            recovery_hypotheses=combination_research.recovery_hypotheses(tf)
+            if not recovery_hypotheses:
+                continue
+
+            row=combination_research.run_one(tf, recovery=True)
+
+            _record_strategy_track(
+                "EMPTY_MAIN_BOUNDED_COMBINATION",
+                row if isinstance(row,dict) else {"status":"MEASURED"},
+            )
+
+            result={
+                "action":"EMPTY_MAIN_BOUNDED_COMBINATION_RESEARCH",
+                "server_push_hold":held,
+                "timeframe":tf,
+                "result":row,
+            }
+            break
+
+    # 3) 초기 18개 독립 family × 5TF bounded 연구.
+    if result is None:
+        nxt = strategy_research.choose_next()
+        if nxt:
+            row = strategy_research.run_one()
+            _record_strategy_track("INITIAL_18_SINGLE", row)
+            result = {"action": "SINGLE_RESEARCH", "server_push_hold": held, "result": row}
+
+    # 4) 48개 safe-grammar × 5TF bounded wave.
+    if result is None:
+        nxt = hypothesis_factory.choose_next()
+        if nxt:
+            row = hypothesis_factory.run_one()
+            _record_strategy_track("SAFE_GRAMMAR_48", row)
+            result = {"action": "SAFE_GRAMMAR_RESEARCH", "server_push_hold": held, "result": row}
+
+    # 5) 단독 pool 완료 뒤 complementary bounded 조합만 연구한다.
+    if result is None:
+        fill_priority = (
+            strategy_research.candidate_fill_priority()
+        )
+
+        combo_tf_order = (
+            fill_priority
+            + [
+                tf
+                for tf in RESEARCH_TF_ORDER
+                if tf not in fill_priority
+            ]
+        )
+
+        for tf in combo_tf_order:
+            hypotheses = combination_research.hypotheses(tf)
+            if hypotheses:
+                row = combination_research.run_one(tf)
+                _record_strategy_track("BOUNDED_COMBINATION", row if isinstance(row, dict) else {"status": "MEASURED"})
+                result = {"action": "COMBINATION_RESEARCH", "server_push_hold": held, "timeframe": tf, "result": row}
+                break
+
+    # 6) 활성 MAIN은 동일 엔진 baseline을 정례 측정하고 challenger를 evidence dominance로만 선택한다.
+    if result is None:
+        for tf in DEPLOY_TF_ORDER:
+            if not frame_live(tf):
+                continue
+            baseline = baseline_research.get(tf)
+            if not baseline:
+                row = baseline_research.run(tf)
+                _record_strategy_track("ACTIVE_MAIN_BASELINE", row)
+                result = {"action": "ACTIVE_MAIN_BASELINE_RESEARCH", "server_push_hold": held, "timeframe": tf, "result": row}
+                break
+
+    if result is None:
+        for tf in DEPLOY_TF_ORDER:
+            if not frame_live(tf):
+                continue
+            challenger = challenger_research.choice(tf)
+            if not challenger:
+                continue
+            dfr = (deploy.state().get("frames") or {}).get(tf) or {}
+            same = str(dfr.get("strategy") or "").upper() == str(challenger.get("strategy") or "").upper()
+            active_tier = str(dfr.get("tier") or "").upper() in {"LOCAL_PROVISIONAL_READY", "PENDING_CANARY_SYNC", "CANARY", "SMALL", "NORMAL"}
+            if same and active_tier:
+                continue
+            req = deploy.create_provisional_request(tf, challenger)
+            if req:
+                _record_strategy_track("ACTIVE_MAIN_CHALLENGER", {"status": "CANDIDATE", "strategy": challenger.get("strategy"), "timeframe": tf})
+                result = {
+                    "action": "ACTIVE_MAIN_CHALLENGER_LOCAL_READY" if req.get("local_only") else "ACTIVE_MAIN_CHALLENGER_CANARY_REQUEST",
+                    "server_push_hold": held,
+                    "request": req,
+                }
+                break
+
+    # 7) ENTRY_RISK/EXIT/REENTRY/SYMBOL/PORTFOLIO/REGIME/EXECUTION/DIRECTION 정례 연구.
+    if result is None:
+        task = task_queue.select_next(exclude={"STRATEGY"})
+        if task:
+            row = policy_research.run_task(task)
+            result = {
+                "action": "LIFECYCLE_POLICY_RESEARCH",
+                "server_push_hold": held,
+                "track": task.get("track"),
+                "task": task,
+                "result": row,
+            }
+
+    # 8) 새 입력이 없으면 기존 descriptive evidence cursor만 갱신하고 중복 연구는 하지 않는다.
+    if result is None:
+        ev = evidence_research.run_next()
+        result = {
+            "action": "NO_NEW_BOUNDED_INPUT",
+            "server_push_hold": held,
+            "evidence": ev,
+            "tracks": list(governance.EXPECTED_TRACKS),
+        }
+
+    if isinstance(result, dict):
+        result.setdefault(
+            "research_architecture_policy_id",
+            architecture.get("policy_id"),
+        )
+
+        result.setdefault(
+            "research_scheduler_status",
+            scheduler_contract.get("status"),
+        )
+
+    governance.assert_kernel_unchanged(kernel_before)
+    return result
+
+
+# ============================================================
+# 자체검증 / Health
+# ============================================================
+
+
+def selftest() -> dict:
+    files = strategy_research.family_files()
+    bad = []
+    for path in files:
+        try:
+            meta = strategy_research.load_meta(path)
+            if not meta.get("name"):
+                bad.append(str(path))
+        except Exception:
+            bad.append(str(path))
+    cv = governance.validate_constitution()
+    recipes = hypothesis_factory.recipes()
+    queue = task_queue.status()
+    return {
+        "ok": not bad and cv.get("ok") and len(files) == 18 and len(recipes) == 48 and set(queue.get("tracks") or {}) == set(governance.EXPECTED_TRACKS),
+        "family_count": len(files),
+        "safe_grammar_count": len(recipes),
+        "bad_families": bad,
+        "constitution": cv,
+        "track_count": len(queue.get("tracks") or {}),
+        "trial73": "COMPLETED_DO_NOT_RERUN",
+        "legacy_trial_counters": {"search": 73, "parameter": 73},
+        "controller_status": controller_status(),
+    }
+
+
+def health() -> dict:
+    return {
+        "ok": bool(governance.validate_constitution().get("ok")),
+        "root": str(ROOT),
+        "config_exists": (ROOT / "strategy_config.json").exists(),
+        "runtime_db_exists": (ROOT / "data" / "server_runtime" / "history.db").exists(),
+        "pending_runtime_sync": PENDING.exists(),
+        "server_push_hold": PUSH_HOLD.exists(),
+        "status": controller_status(),
+    }
+
+
+# ============================================================
+# 메인
+# ============================================================
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["once", "status", "selftest", "health", "managed-dry-run", "loop"], default="once")
+    parser.add_argument("--enable-research", action="store_true")
+    parser.add_argument("--skip-server-health", action="store_true")
+    parser.add_argument("--sleep-sec", type=int, default=60)
+    parser.add_argument("--max-cycles", type=int, default=0)
+    args = parser.parse_args()
+
+    if args.mode == "status":
+        print(json.dumps(controller_status(), ensure_ascii=False, indent=2, default=str))
+        return
+    if args.mode == "selftest":
+        print(json.dumps(selftest(), ensure_ascii=False, indent=2, default=str))
+        return
+    if args.mode == "health":
+        print(json.dumps(health(), ensure_ascii=False, indent=2, default=str))
+        return
+    if args.mode == "managed-dry-run":
+        print(json.dumps(managed_dry_run(), ensure_ascii=False, indent=2, default=str))
+        return
+
+    def one():
+        try:
+            with lock():
+                # MANAGED_RESEARCH_CLI_WIRE_V1
+                #
+                # Roadmap Manager acquires a scoped SERVER_PUSH_HOLD
+                # before a bounded research action. In that exact state,
+                # route research into the unified Stage10 lifecycle
+                # manager. HOLD-off execution keeps the legacy run_once
+                # runtime/release path unchanged.
+                if args.enable_research and PUSH_HOLD.exists():
+                    return managed_research_once(True)
+
+                return run_once(
+                    enable_research=args.enable_research
+                )
+        except RuntimeError as exc:
+            if str(exc) == "RESEARCH_ALREADY_RUNNING":
+                return {"action": "SKIP", "reason": "RESEARCH_ALREADY_RUNNING"}
+            raise
+
+    if args.mode == "loop":
+        cycles = 0
+        while True:
+            print(json.dumps(one(), ensure_ascii=False, default=str), flush=True)
+            cycles += 1
+            if args.max_cycles > 0 and cycles >= args.max_cycles:
+                break
+            time.sleep(max(1, args.sleep_sec))
+        return
+
+    print(json.dumps(one(), ensure_ascii=False, indent=2, default=str))
+
+
+if __name__ == "__main__":
+    main()

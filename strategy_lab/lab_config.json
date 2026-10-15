@@ -1,0 +1,32 @@
+{
+  "auto_deploy": false,
+  "auto_test": true,
+  "data_file": "C:\\my\\bottest\\gate_lab_exact_long_cache.parquet",
+  "fee_rate": 0.0005,
+  "leverage_max": 50,
+  "leverage_min": 1,
+  "leverage_test_enabled": false,
+  "mode": "EXACT_SIGNAL_CACHE",
+  "reference_only_timeframes": [
+    "1M"
+  ],
+  "research_candidate_fill_target": 8,
+  "research_candidate_fill_timeframes": [
+    "30M",
+    "1H",
+    "6H",
+    "12H",
+    "1D",
+    "1W"
+  ],
+  "schema": "STRATEGY_LAB_CONFIG_V4",
+  "timeframes": [
+    "30M",
+    "1H",
+    "6H",
+    "12H",
+    "1D",
+    "1W",
+    "1M"
+  ]
+}
