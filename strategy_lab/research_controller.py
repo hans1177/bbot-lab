@@ -656,7 +656,7 @@ def managed_research_once(held: bool) -> dict:
     return {"action":"AUTO_RESEARCH_MANAGER_STAGE10","server_push_hold":held,"selection":selection,"elapsed_seconds":elapsed,"pipeline_sync":sync,"pipeline_work":work,"result":row,"automatic_promotion":False}
 
 
-def managed_dry_run(include_inputs: bool = False) -> dict:
+def managed_dry_run(include_inputs: bool = False, export_inputs=None) -> dict:
     cv=governance.validate_constitution(); work=strategy_research.pipeline_work_status();
     samples={
         "backlog":task_queue.preview_auto_research_bucket({"HISTORICAL_314_PIPELINE":True,"INDIVIDUAL_TRAILING":True,"NEW_PURE_AND_HARD_PASS":True,"TARGETED_REDEVELOPMENT":True,"FULL_VALIDATION_AND_BLIND":True},True,{}),
@@ -724,6 +724,75 @@ def managed_dry_run(include_inputs: bool = False) -> dict:
         inventory['input_files_present'] = bool(not missing and candles and candle_bytes and state_valid and not source_errors)
         result['input_inventory'] = inventory
         result['ok'] = bool(result['ok'] and inventory['input_files_present'])
+    # 최신 입력 인계: 공개 업로드 없이 로컬 압축만 생성한다.
+    if export_inputs is not None:
+        import re
+        import tempfile
+        import zipfile
+        import hashlib
+        destination = Path(export_inputs).resolve()
+        if not include_inputs or not result['ok']:
+            raise RuntimeError('EXPORT_INPUT_CHECK_REQUIRED')
+        if destination.suffix.lower() != '.zip' or destination.is_relative_to(ROOT.resolve()):
+            raise ValueError('EXPORT_OUTSIDE_RESEARCH_ROOT_ZIP_REQUIRED')
+        if destination.exists():
+            raise FileExistsError('EXPORT_DESTINATION_ALREADY_EXISTS')
+        if not destination.parent.is_dir():
+            raise FileNotFoundError('EXPORT_PARENT_MISSING')
+        paths = {ROOT / name for name in required}
+        paths.update(candles)
+        paths.update(p for p in LAB.rglob('*') if p.is_file() and p.suffix.lower() in {'.py', '.json', '.jsonl', '.csv', '.parquet'} and not any(part in {'__pycache__', '.git', '.venv', 'server_runtime', 'logs'} for part in p.relative_to(LAB).parts) and p.name != 'server_exchange_snapshot.json')
+        total = sum(p.stat().st_size for p in paths)
+        if total > 4 * 1024**3:
+            raise RuntimeError('EXPORT_INPUTS_EXCEED_4_GIB')
+        patterns = (
+            rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',
+            rb'(?:AKIA|ASIA)[A-Z0-9]{16}',
+            rb'gh[pousr]_[A-Za-z0-9]{30,}',
+            rb'\d{9,12}:[A-Za-z0-9_-]{35}',
+        )
+        fd, temporary = tempfile.mkstemp(prefix='.research-export-' + destination.stem + '-', suffix='.tmp', dir=str(destination.parent))
+        os.close(fd)
+        manifest = {'schema': 'B_BOT_RESEARCH_INPUT_HANDOFF_V1', 'created_at': now(),
+                    'public_upload_allowed': False, 'automatic_promotion': False,
+                    'orders_touched': False, 'files': {}}
+        fingerprints = {}
+        try:
+            with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+                for path in sorted(paths):
+                    resolved = path.resolve()
+                    if path.is_symlink() or not resolved.is_relative_to(ROOT.resolve()):
+                        raise RuntimeError('EXPORT_PATH_OUTSIDE_RESEARCH_ROOT')
+                    before = path.stat()
+                    if before.st_size > 512 * 1024**2:
+                        raise RuntimeError('EXPORT_SINGLE_FILE_EXCEEDS_512_MIB')
+                    raw = path.read_bytes()
+                    after = path.stat()
+                    signature = (before.st_size, before.st_mtime_ns, before.st_ino)
+                    if signature != (after.st_size, after.st_mtime_ns, after.st_ino) or len(raw) != before.st_size:
+                        raise RuntimeError('EXPORT_INPUT_CHANGED_RETRY')
+                    if path.suffix.lower() in {'.py', '.json', '.jsonl', '.csv'} and any(re.search(pattern, raw) for pattern in patterns):
+                        raise RuntimeError('EXPORT_CREDENTIAL_PATTERN_DETECTED')
+                    relative = path.relative_to(ROOT).as_posix()
+                    archive.writestr(relative, raw)
+                    manifest['files'][relative] = {'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+                    fingerprints[path] = signature
+                    if archive.fp.tell() > 450 * 1024**2:
+                        raise RuntimeError('EXPORT_COMPRESSED_SIZE_EXCEEDS_450_MIB')
+                for path, signature in fingerprints.items():
+                    current = path.stat()
+                    if signature != (current.st_size, current.st_mtime_ns, current.st_ino):
+                        raise RuntimeError('EXPORT_INPUT_CHANGED_RETRY')
+                archive.writestr('HANDOFF.json', json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
+            size = Path(temporary).stat().st_size
+            if size > 450 * 1024**2:
+                raise RuntimeError('EXPORT_COMPRESSED_SIZE_EXCEEDS_450_MIB')
+            os.link(temporary, destination)
+            result['export'] = {'path': str(destination), 'bytes': size, 'files': len(manifest['files']),
+                                'created': True, 'public_upload_allowed': False,
+                                'source_files_modified': False, 'server_write': False}
+        finally:
+            Path(temporary).unlink(missing_ok=True)
     return result
 
 
@@ -1013,6 +1082,7 @@ def main() -> None:
     parser.add_argument("--enable-research", action="store_true")
     parser.add_argument("--skip-server-health", action="store_true")
     parser.add_argument("--check-inputs", action="store_true")
+    parser.add_argument("--export-inputs", type=Path)
     parser.add_argument("--sleep-sec", type=int, default=60)
     parser.add_argument("--max-cycles", type=int, default=0)
     args = parser.parse_args()
@@ -1027,10 +1097,23 @@ def main() -> None:
         print(json.dumps(health(), ensure_ascii=False, indent=2, default=str))
         return
     if args.mode == "managed-dry-run":
-        result = managed_dry_run(include_inputs=args.check_inputs)
-        output = {key: result[key] for key in ("ok", "input_inventory", "mutated", "orders_touched")} if args.check_inputs else result
+        if args.export_inputs is not None:
+            try:
+                with lock():
+                    result = managed_dry_run(include_inputs=True, export_inputs=args.export_inputs)
+            except RuntimeError as exc:
+                if str(exc) == "RESEARCH_ALREADY_RUNNING":
+                    print(json.dumps({"action": "SKIP", "reason": str(exc), "export_created": False}))
+                    raise SystemExit(3)
+                raise
+        else:
+            result = managed_dry_run(include_inputs=args.check_inputs)
+        checked = args.check_inputs or args.export_inputs is not None
+        output = {key: result[key] for key in ("ok", "input_inventory", "mutated", "orders_touched")} if checked else result
+        if "export" in result:
+            output["export"] = result["export"]
         print(json.dumps(output, ensure_ascii=False, indent=2, default=str))
-        if args.check_inputs and not result["ok"]:
+        if checked and not result["ok"]:
             raise SystemExit(2)
         return
 
