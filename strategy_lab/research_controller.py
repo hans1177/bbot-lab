@@ -753,6 +753,39 @@ def managed_dry_run(include_inputs: bool = False, export_inputs=None) -> dict:
             rb'gh[pousr]_[A-Za-z0-9]{30,}',
             rb'\d{9,12}:[A-Za-z0-9_-]{35}',
         )
+        # 압축 전에 검사하고 압축 시 동일 바이트인지 해시로 다시 묶는다.
+        scanned_hashes = {}
+        feedback_path = LAB / 'results' / 'v3' / 'runtime_feedback.json'
+        for path in sorted(paths, key=lambda p: (p != feedback_path, str(p))):
+            if path.suffix.lower() not in {'.py', '.json', '.jsonl', '.csv'}:
+                continue
+            if path.is_symlink() or not path.resolve().is_relative_to(ROOT.resolve()):
+                raise RuntimeError('EXPORT_PATH_OUTSIDE_RESEARCH_ROOT')
+            if path.stat().st_size > 512 * 1024**2:
+                raise RuntimeError('EXPORT_SINGLE_FILE_EXCEEDS_512_MIB')
+            raw = path.read_bytes()
+            relative = path.relative_to(ROOT).as_posix()
+            scan_raw = raw
+            # 원장 생성식의 EXTERNAL_TRADE 이벤트와 해당 기록의 종목·LEG를 대조한다.
+            # 압축에 저장하는 원본 바이트와 연구 증거는 변경하지 않는다.
+            if relative == 'strategy_lab/results/v3/runtime_feedback.json':
+                feedback = json.loads(raw.decode('utf-8-sig'))
+                if isinstance(feedback, dict) and feedback.get('schema') == 'B_BOT_R4_RUNTIME_RESEARCH_FEEDBACK_V1':
+                    for record in feedback.get('records') or []:
+                        if not isinstance(record, dict) or not isinstance(record.get('exit_fill_ids'), list):
+                            continue
+                        for index, value in enumerate(record['exit_fill_ids']):
+                            event = re.fullmatch(r'EXTERNAL_TRADE:([A-Z0-9]{2,32}):[0-9]{1,20}:(LEG_[0-9a-f]{32})', value) if isinstance(value, str) else None
+                            if event and event.group(1) == record.get('symbol') and event.group(2) == record.get('leg_id'):
+                                record['exit_fill_ids'][index] = 'VERIFIED_R4_FILL_EVENT_ID'
+                    scan_raw = json.dumps(feedback, ensure_ascii=False).encode('utf-8')
+            if path.suffix.lower() in {'.py', '.json', '.jsonl', '.csv'}:
+                for pattern_index, pattern in enumerate(patterns):
+                    match = re.search(pattern, scan_raw)
+                    if match:
+                        # 파일 경로와 종류만 반환하고 탐지된 값은 노출하지 않는다.
+                        raise RuntimeError('EXPORT_CREDENTIAL_PATTERN_DETECTED:' + relative + ':RULE_' + str(pattern_index + 1))
+            scanned_hashes[path] = hashlib.sha256(raw).hexdigest()
         fd, temporary = tempfile.mkstemp(prefix='.research-export-' + destination.stem + '-', suffix='.tmp', dir=str(destination.parent))
         os.close(fd)
         manifest = {'schema': 'B_BOT_RESEARCH_INPUT_HANDOFF_V1', 'created_at': now(),
@@ -775,25 +808,8 @@ def managed_dry_run(include_inputs: bool = False, export_inputs=None) -> dict:
                     if signature != (after.st_size, after.st_mtime_ns, after.st_ino) or len(raw) != before.st_size:
                         raise RuntimeError('EXPORT_INPUT_CHANGED_RETRY')
                     relative = path.relative_to(ROOT).as_posix()
-                    scan_raw = raw
-                    # R4 청산 체결 ID의 숫자:UUID 전체 형식만 검사 뷰에서 구분한다.
-                    # 압축에 저장하는 원본 바이트와 연구 증거는 변경하지 않는다.
-                    if relative == 'strategy_lab/results/v3/runtime_feedback.json':
-                        feedback = json.loads(raw.decode('utf-8-sig'))
-                        if isinstance(feedback, dict) and feedback.get('schema') == 'B_BOT_R4_RUNTIME_RESEARCH_FEEDBACK_V1':
-                            for record in feedback.get('records') or []:
-                                if not isinstance(record, dict) or not isinstance(record.get('exit_fill_ids'), list):
-                                    continue
-                                for index, value in enumerate(record['exit_fill_ids']):
-                                    if isinstance(value, str) and re.fullmatch(r'[0-9]{1,20}:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', value):
-                                        record['exit_fill_ids'][index] = 'VERIFIED_R4_FILL_EVENT_ID'
-                            scan_raw = json.dumps(feedback, ensure_ascii=False).encode('utf-8')
-                    if path.suffix.lower() in {'.py', '.json', '.jsonl', '.csv'}:
-                        for pattern_index, pattern in enumerate(patterns):
-                            match = re.search(pattern, scan_raw)
-                            if match:
-                                # 파일 경로와 종류만 반환하고 탐지된 값은 노출하지 않는다.
-                                raise RuntimeError('EXPORT_CREDENTIAL_PATTERN_DETECTED:' + relative + ':RULE_' + str(pattern_index + 1))
+                    if path in scanned_hashes and hashlib.sha256(raw).hexdigest() != scanned_hashes[path]:
+                        raise RuntimeError('EXPORT_INPUT_CHANGED_RETRY')
                     archive.writestr(relative, raw)
                     manifest['files'][relative] = {'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
                     fingerprints[path] = signature

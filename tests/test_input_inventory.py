@@ -175,11 +175,11 @@ class ExportInputTests(InputFixture, unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue(folder.is_dir())
 
-    def test_runtime_fill_uuid_preserved_without_token_false_positive(self):
+    def test_runtime_external_fill_preserved_without_token_false_positive(self):
         import zipfile
         self.fixture()
         name = 'strategy_lab/results/v3/runtime_feedback.json'
-        payload = {'schema': 'B_BOT_R4_RUNTIME_RESEARCH_FEEDBACK_V1', 'records': [{'exit_fill_ids': ['123456789:12345678-1234-1234-1234-123456789abc']} ]}
+        payload = {'schema': 'B_BOT_R4_RUNTIME_RESEARCH_FEEDBACK_V1', 'records': [{'symbol': 'ZKUSDT', 'leg_id': 'LEG_' + 'a' * 32, 'exit_fill_ids': ['EXTERNAL_TRADE:ZKUSDT:123456789:LEG_' + 'a' * 32]} ]}
         raw = json.dumps(payload).encode()
         (self.root / name).write_bytes(raw)
         result, destination = self.export()
@@ -199,7 +199,23 @@ class ExportInputTests(InputFixture, unittest.TestCase):
 
     def test_token_elsewhere_in_feedback_still_blocked(self):
         self.fixture()
-        payload = {'schema': 'B_BOT_R4_RUNTIME_RESEARCH_FEEDBACK_V1', 'records': [{'exit_fill_ids': ['123456789:12345678-1234-1234-1234-123456789abc'], 'detail': '123456789:' + 'B' * 35}]}
+        payload = {'schema': 'B_BOT_R4_RUNTIME_RESEARCH_FEEDBACK_V1', 'records': [{'symbol': 'ZKUSDT', 'leg_id': 'LEG_' + 'a' * 32, 'exit_fill_ids': ['EXTERNAL_TRADE:ZKUSDT:123456789:LEG_' + 'a' * 32], 'detail': '123456789:' + 'B' * 35}]}
+        (self.root / 'strategy_lab/results/v3/runtime_feedback.json').write_text(json.dumps(payload))
+        result, destination = self.export()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(destination.exists())
+
+    def test_external_fill_with_wrong_record_binding_blocked(self):
+        self.fixture()
+        payload = {'schema': 'B_BOT_R4_RUNTIME_RESEARCH_FEEDBACK_V1', 'records': [{'symbol': 'BTCUSDT', 'leg_id': 'LEG_' + 'b' * 32, 'exit_fill_ids': ['EXTERNAL_TRADE:ZKUSDT:123456789:LEG_' + 'a' * 32]}]}
+        (self.root / 'strategy_lab/results/v3/runtime_feedback.json').write_text(json.dumps(payload))
+        result, destination = self.export()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(destination.exists())
+
+    def test_external_fill_like_text_elsewhere_still_blocked(self):
+        self.fixture()
+        payload = {'schema': 'B_BOT_R4_RUNTIME_RESEARCH_FEEDBACK_V1', 'records': [{'symbol': 'ZKUSDT', 'leg_id': 'LEG_' + 'a' * 32, 'exit_fill_ids': [], 'detail': 'EXTERNAL_TRADE:ZKUSDT:123456789:LEG_' + 'a' * 32}]}
         (self.root / 'strategy_lab/results/v3/runtime_feedback.json').write_text(json.dumps(payload))
         result, destination = self.export()
         self.assertNotEqual(result.returncode, 0)
