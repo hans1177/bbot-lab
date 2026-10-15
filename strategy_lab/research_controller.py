@@ -656,13 +656,76 @@ def managed_research_once(held: bool) -> dict:
     return {"action":"AUTO_RESEARCH_MANAGER_STAGE10","server_push_hold":held,"selection":selection,"elapsed_seconds":elapsed,"pipeline_sync":sync,"pipeline_work":work,"result":row,"automatic_promotion":False}
 
 
-def managed_dry_run() -> dict:
+def managed_dry_run(include_inputs: bool = False) -> dict:
     cv=governance.validate_constitution(); work=strategy_research.pipeline_work_status();
     samples={
         "backlog":task_queue.preview_auto_research_bucket({"HISTORICAL_314_PIPELINE":True,"INDIVIDUAL_TRAILING":True,"NEW_PURE_AND_HARD_PASS":True,"TARGETED_REDEVELOPMENT":True,"FULL_VALIDATION_AND_BLIND":True},True,{}),
         "normal":task_queue.preview_auto_research_bucket({"NEW_PURE_AND_HARD_PASS":True,"ENTRY_AND_FINAL_RISK":True,"TRAILING_AND_REENTRY":True,"FULL_VALIDATION":True,"TARGETED_REDEVELOPMENT":True,"SEALED_FINAL_BLIND":True},False,{}),
     }
-    return {"ok":bool(cv.get("ok")) and bool(samples["backlog"]) and bool(samples["normal"]),"constitution":cv,"pipeline_work":work,"scheduler_preview":samples,"manager_status":task_queue.auto_research_manager_status(),"mutated":False,"orders_touched":False}
+    result = {"ok":bool(cv.get("ok")) and bool(samples["backlog"]) and bool(samples["normal"]),"constitution":cv,"pipeline_work":work,"scheduler_preview":samples,"manager_status":task_queue.auto_research_manager_status(),"mutated":False,"orders_touched":False}
+    # 연구 이전 입력 검사: 상태·시세·전략 소스는 읽기만 한다.
+    if include_inputs:
+        import hashlib
+        required = (
+            'gate_lab_fast.py', 'gate_lab_exact_long_cache.parquet',
+            'ROADMAP_CONSTITUTION_V3.json', 'strategy_lab/lab_config.json',
+            'strategy_lab/results/v3/historical_314_pipeline_stage2.json',
+            'strategy_lab/results/v3/trial_ledger.json',
+            'strategy_lab/results/v3/research_knowledge.json',
+        )
+        files = {}
+        for name in required:
+            path = ROOT / name
+            exists = path.is_file()
+            files[name] = {'exists': exists, 'bytes': path.stat().st_size if exists else 0}
+        candles = [p for p in (ROOT / 'data' / 'candles').rglob('*.parquet') if p.is_file()]
+        candle_bytes = sum(p.stat().st_size for p in candles)
+        source_errors = []
+        source_count = 0
+        windows_paths = 0
+        terminal = {'REDEVELOPMENT_SUPERSEDED_BY_NEW_VERSION', 'HARD_PASS_RECHECK_FAIL', 'PERSISTENT_FAIL'}
+        pipeline = load(ROOT / required[4], {})
+        entries = pipeline.get('entries') if isinstance(pipeline, dict) else None
+        ledger = load(ROOT / required[5], {})
+        memory = load(ROOT / required[6], {})
+        state_valid = (
+            isinstance(entries, list) and bool(entries)
+            and isinstance(ledger, dict) and ledger.get('schema') == 'B_BOT_V3_TRIAL_LEDGER_V1' and isinstance(ledger.get('entries'), list)
+            and isinstance(memory, dict) and isinstance(memory.get('records'), dict)
+        )
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict) or entry.get('eligible') is not True or entry.get('pipeline_stage') in terminal:
+                continue
+            relative = str(entry.get('canonical_source_file') or '')
+            source_count += 1
+            windows_paths += int('\\' in relative)
+            path = (ROOT / relative.replace('\\', '/')).resolve()
+            expected = str(entry.get('source_sha256') or '').lower()
+            reason = None
+            if not relative or not path.is_relative_to(ROOT.resolve()):
+                reason = 'SOURCE_PATH_OUTSIDE_RESEARCH_ROOT'
+            elif not path.is_file():
+                reason = 'CANONICAL_SOURCE_FILE_MISSING'
+            elif not expected or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                reason = 'SOURCE_SHA256_MISMATCH'
+            if reason:
+                source_errors.append({'strategy_id': entry.get('strategy_id'), 'exact_strategy_version': entry.get('exact_strategy_version'), 'reason': reason})
+        missing = [name for name, row in files.items() if not row['exists'] or not row['bytes']]
+        inventory = {
+            'files': files, 'missing': missing,
+            'candles': {'files': len(candles), 'bytes': candle_bytes},
+            'checkpoint_structure_valid': state_valid,
+            'active_sources_checked': source_count,
+            'source_error_count': len(source_errors), 'source_errors': source_errors[:20],
+            'windows_source_path_count': windows_paths,
+            'portable_path_review_required': bool(windows_paths),
+            'metadata_only': True, 'official_market_data_validation': False,
+        }
+        inventory['input_files_present'] = bool(not missing and candles and candle_bytes and state_valid and not source_errors)
+        result['input_inventory'] = inventory
+        result['ok'] = bool(result['ok'] and inventory['input_files_present'])
+    return result
+
 
 def run_once(enable_research: bool = True) -> dict:
     constitution = governance.validate_constitution()
@@ -949,6 +1012,7 @@ def main() -> None:
     parser.add_argument("--mode", choices=["once", "status", "selftest", "health", "managed-dry-run", "loop"], default="once")
     parser.add_argument("--enable-research", action="store_true")
     parser.add_argument("--skip-server-health", action="store_true")
+    parser.add_argument("--check-inputs", action="store_true")
     parser.add_argument("--sleep-sec", type=int, default=60)
     parser.add_argument("--max-cycles", type=int, default=0)
     args = parser.parse_args()
@@ -963,7 +1027,11 @@ def main() -> None:
         print(json.dumps(health(), ensure_ascii=False, indent=2, default=str))
         return
     if args.mode == "managed-dry-run":
-        print(json.dumps(managed_dry_run(), ensure_ascii=False, indent=2, default=str))
+        result = managed_dry_run(include_inputs=args.check_inputs)
+        output = {key: result[key] for key in ("ok", "input_inventory", "mutated", "orders_touched")} if args.check_inputs else result
+        print(json.dumps(output, ensure_ascii=False, indent=2, default=str))
+        if args.check_inputs and not result["ok"]:
+            raise SystemExit(2)
         return
 
     def one():
