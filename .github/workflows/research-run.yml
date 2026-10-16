@@ -186,6 +186,15 @@ jobs:
           if any(reason in {'RUN_STRATEGY_FAIL','RESULT_NOT_FOUND'} for row in rows for reason in reasons(row)):raise RuntimeError('RESEARCH_EXECUTION_FAILED_CHECK_PRIVATE_EVIDENCE')
           print('RESEARCH_EXECUTION_AND_RESULTS_RECORDED; STRATEGY_QUALIFICATION_IS_SEPARATE')
           PY
+      - name: Prepare runtime candidate handoff
+        if: steps.research.outcome == 'success'
+        shell: python
+        run: |
+          import os,sys,json
+          from pathlib import Path
+          sys.path.insert(0,str(Path(os.environ['BBOT_LOCAL_ROOT'])/'strategy_lab'))
+          import v3_deployment
+          print(json.dumps(v3_deployment.export_runtime_candidates(Path(os.environ['RUNNER_TEMP'])/'runtime-candidates-out')))
       - name: Preserve research checkpoint
         id: checkpoint
         if: always() && steps.prepare.outcome == 'success' && steps.restore.outcome == 'success'
@@ -222,20 +231,24 @@ jobs:
               body=None if data is None else json.dumps(data).encode()
               req=urllib.request.Request(api+path,data=body,method=method,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'})
               with urllib.request.urlopen(req,timeout=90) as response:return json.load(response)
-          try:parent=request('/git/ref/heads/research-state')['object']['sha']
-          except urllib.error.HTTPError as error:
-              if error.code!=404:raise
-              parent=None
-          out=Path(os.environ['RUNNER_TEMP'])/'research-checkpoint-out'
-          elements=[]
-          for name in ('CHECKPOINT.json','checkpoint.zip'):
-              raw=(out/name).read_bytes()
-              if len(raw)>90*1024**2:raise RuntimeError('CHECKPOINT_GIT_BLOB_LIMIT')
-              blob=request('/git/blobs',{'content':base64.b64encode(raw).decode(),'encoding':'base64'})
-              elements.append({'path':name,'mode':'100644','type':'blob','sha':blob['sha']})
-          tree=request('/git/trees',{'tree':elements})
-          commit=request('/git/commits',{'message':'Research checkpoint run '+os.environ['GITHUB_RUN_ID']+' attempt '+os.environ['GITHUB_RUN_ATTEMPT'],'tree':tree['sha'],'parents':[parent] if parent else []})
-          if parent:request('/git/refs/heads/research-state',{'sha':commit['sha'],'force':False},'PATCH')
-          else:request('/git/refs',{'ref':'refs/heads/research-state','sha':commit['sha']})
-          if request('/git/ref/heads/research-state')['object']['sha']!=commit['sha']:raise RuntimeError('CHECKPOINT_REF_VERIFY')
-          print('PRIVATE_GIT_CHECKPOINT_SAVED_AND_VERIFIED',commit['sha'])
+          for branch,folder in [('research-state','research-checkpoint-out'),('runtime-candidates','runtime-candidates-out')]:
+              out=Path(os.environ['RUNNER_TEMP'])/folder
+              if not out.exists():continue
+              if branch=='runtime-candidates' and not (out/'MANIFEST.json').is_file():continue
+              try:parent=request('/git/ref/heads/'+branch)['object']['sha']
+              except urllib.error.HTTPError as error:
+                  if error.code!=404:raise
+                  parent=None
+              elements=[]
+              for path in sorted(out.rglob('*')):
+                  if not path.is_file():continue
+                  name=path.relative_to(out).as_posix();raw=path.read_bytes()
+                  if len(raw)>90*1024**2:raise RuntimeError('CHECKPOINT_GIT_BLOB_LIMIT')
+                  blob=request('/git/blobs',{'content':base64.b64encode(raw).decode(),'encoding':'base64'})
+                  elements.append({'path':name,'mode':'100644','type':'blob','sha':blob['sha']})
+              tree=request('/git/trees',{'tree':elements})
+              commit=request('/git/commits',{'message':branch+' run '+os.environ['GITHUB_RUN_ID']+' attempt '+os.environ['GITHUB_RUN_ATTEMPT'],'tree':tree['sha'],'parents':[parent] if parent else []})
+              if parent:request('/git/refs/heads/'+branch,{'sha':commit['sha'],'force':False},'PATCH')
+              else:request('/git/refs',{'ref':'refs/heads/'+branch,'sha':commit['sha']})
+              if request('/git/ref/heads/'+branch)['object']['sha']!=commit['sha']:raise RuntimeError('CHECKPOINT_REF_VERIFY')
+              print('PRIVATE_GIT_HANDOFF_SAVED_AND_VERIFIED',branch,commit['sha'])

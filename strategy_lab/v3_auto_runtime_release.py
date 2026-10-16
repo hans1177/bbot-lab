@@ -3072,6 +3072,120 @@ print(json.dumps({'service':service,'refs':refs,'files':files,'operating_files_c
     return 0
 
 
+def install_server_receiver(code_ref):
+    """기존 Runtime 모듈의 수신 명령만 설치한다. 거래 활성화와 검증기 이식은 별도 gate다."""
+    import base64,re
+    if os.name!='nt' or not re.fullmatch('[0-9a-f]{40}',str(code_ref or '')):raise RuntimeError('PINNED_WINDOWS_SETUP_REQUIRED')
+    def api(path,data=None,optional=False):
+        cmd=['gh','api','repos/hans1177/bbot-lab'+path]
+        if data is not None:cmd+=['--method','PATCH' if path.startswith('/git/refs/heads/') else 'POST','--input','-']
+        proc=subprocess.run(cmd,input=json.dumps(data) if data is not None else None,text=True,encoding='utf-8',capture_output=True,timeout=90)
+        if proc.returncode:
+            if optional and '404' in proc.stderr:return None
+            raise RuntimeError('RECEIVER_SETUP_GITHUB_FAILED:'+proc.stderr[-800:])
+        return json.loads(proc.stdout)
+    if api('').get('private') is not True:raise RuntimeError('PRIVATE_REPOSITORY_REQUIRED')
+    file=api('/contents/runtime/strategy_runtime.py?ref='+code_ref)
+    runtime=base64.b64decode(file['content']);compile(runtime.decode('utf-8-sig'),'strategy_runtime.py','exec')
+    # 현재 PC의 기존 검증기/배포 스크립트만 확보한다. 설정·키·DB는 수집하지 않는다.
+    names=('verify_v3.py','verify_overfit_validation.py','verify_logic_validation.py','verify_r4_sync.py','verify_open_position_version_policy.py','verify_autonomous_runtime_release.py','strategy_runtime_sync.ps1','sync_from_server.ps1')
+    entries=[];hashes={}
+    for name in names:
+        path=ROOT/name
+        if not path.is_file() or path.is_symlink() or path.stat().st_size>1024**2:raise RuntimeError('EXISTING_RELEASE_CHECK_MISSING:'+name)
+        raw=path.read_bytes()
+        if name.endswith('.py'):compile(raw.decode('utf-8-sig'),name,'exec')
+        if any(re.search(pattern,raw) for pattern in (rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',rb'(?:AKIA|ASIA)[A-Z0-9]{16}',rb'gh[pousr]_[A-Za-z0-9]{30,}')):raise RuntimeError('RELEASE_CHECK_CREDENTIAL_PATTERN:'+name)
+        blob=api('/git/blobs',{'content':base64.b64encode(raw).decode(),'encoding':'base64'})
+        entries.append({'path':name,'mode':'100644','type':'blob','sha':blob['sha']});hashes[name]=hashlib.sha256(raw).hexdigest()
+    entries.append({'path':'CHECKS.json','mode':'100644','type':'blob','content':json.dumps({'schema':'B_BOT_CANONICAL_RELEASE_CHECKS_V1','files':hashes,'created_at':now(),'configuration_exported':False,'keys_exported':False})})
+    old=api('/git/ref/heads/release-checks',optional=True);parent=old['object']['sha'] if old else None
+    tree=api('/git/trees',{'tree':entries});commit=api('/git/commits',{'message':'Preserve existing release checks for Linux portability review','tree':tree['sha'],'parents':[parent] if parent else []})
+    if parent:api('/git/refs/heads/release-checks',{'sha':commit['sha'],'force':False})
+    else:api('/git/refs',{'ref':'refs/heads/release-checks','sha':commit['sha']})
+    payload={'runtime':base64.b64encode(runtime).decode(),'runtime_sha256':hashlib.sha256(runtime).hexdigest(),'baseline_sha256':'1cb77962db51e26fccc83cdcbb88b5f801fb0c2dd0d5b29aef3a7637bf486cfb','code_ref':code_ref}
+    remote='import base64,json\npayload=json.loads(base64.b64decode('+repr(base64.b64encode(json.dumps(payload).encode()).decode())+'))\n'+r'''
+import fcntl,hashlib,importlib.util,os,subprocess,tempfile,time
+from pathlib import Path
+root=Path('/home/ec2-user/bot');state=root/'state';target=root/'strategy_runtime.py'
+def service():
+    return subprocess.run(['systemctl','show','r4-runtime.service','-p','MainPID','--value'],capture_output=True,text=True,check=True,timeout=10).stdout.strip()
+lock=Path('/tmp/bbot_source_sync.lock').open('a+b')
+fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+before_pid=service()
+if not before_pid or before_pid=='0':raise RuntimeError('R4_SERVICE_NOT_RUNNING')
+if target.is_symlink():raise RuntimeError('RUNTIME_SOURCE_SYMLINK')
+old=target.read_bytes();old_sha=hashlib.sha256(old).hexdigest();new=base64.b64decode(payload['runtime'])
+if old_sha not in {payload['baseline_sha256'],payload['runtime_sha256']}:raise RuntimeError('AWS_RUNTIME_SOURCE_CHANGED')
+if hashlib.sha256(new).hexdigest()!=payload['runtime_sha256']:raise RuntimeError('INSTALL_SOURCE_HASH')
+compile(new,'strategy_runtime.py','exec')
+settings=state/'r4_github_receiver.json';old_settings=settings.read_bytes() if settings.exists() else None
+if settings.is_symlink():raise RuntimeError('RECEIVER_SETTINGS_SYMLINK')
+config={'enabled':True,'repository':'hans1177/bbot-lab','branch':'runtime-candidates','constitution_hash':'fcf9a69d6100b8638cf031680eef1b5e234ae10edd66f808e2c08631edced76a','engine_sha256':'3c665f886a02757e3b35444b437312385d88790c47c6346e90c64dfc0a5a86ed','code_ref':payload['code_ref'],'automatic_registration_enabled':False}
+unit="""[Unit]
+Description=B-Bot verified GitHub candidate receipt
+After=network-online.target
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/bot
+Environment=BOT_BASE_DIR=/home/ec2-user/bot
+ExecStart=/home/ec2-user/bot/venv/bin/python -B /home/ec2-user/bot/strategy_runtime.py --receive-github
+TimeoutStartSec=90
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/ec2-user/bot/state /home/ec2-user/bot/logs
+ReadOnlyPaths=/home/ec2-user/.ssh
+"""
+timer="""[Unit]
+Description=B-Bot GitHub receipt timer
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=60s
+AccuracySec=5s
+Unit=bbot-github-receive.service
+[Install]
+WantedBy=timers.target
+"""
+def sudo(*args):subprocess.run(['sudo','-n',*args],check=True,capture_output=True,timeout=30)
+with tempfile.TemporaryDirectory(prefix='github-receive-install-',dir=str(state)) as folder:
+    temp=Path(folder);module=temp/'strategy_runtime.py';module.write_bytes(new)
+    env=os.environ.copy();env['BOT_BASE_DIR']=str(root);env['PYTHONDONTWRITEBYTECODE']='1'
+    check="import importlib.util; s=importlib.util.spec_from_file_location('staged_runtime',"+repr(str(module))+");m=importlib.util.module_from_spec(s);s.loader.exec_module(m);r=m.validate();print(r);assert r['ok']"
+    subprocess.run([str(root/'venv/bin/python'),'-B','-c',check],env=env,check=True,capture_output=True,timeout=30)
+    backup=state/'github_receiver_backup';backup.mkdir(exist_ok=True)
+    (backup/('strategy_runtime.'+old_sha+'.py')).write_bytes(old)
+    settings.write_text(json.dumps(config,sort_keys=True),encoding='utf-8')
+    try:
+        received=subprocess.run([str(root/'venv/bin/python'),'-B',str(module),'--receive-github'],env=env,capture_output=True,text=True,timeout=90)
+        if received.returncode:raise RuntimeError('AWS_CANDIDATE_RECEIPT_TEST_FAILED:'+received.stdout[-500:])
+        result=json.loads(received.stdout)
+        temporary=target.with_name(target.name+'.github.tmp');temporary.write_bytes(new);os.replace(temporary,target)
+        (temp/'bbot-github-receive.service').write_text(unit);(temp/'bbot-github-receive.timer').write_text(timer)
+        sudo('install','-m','644',str(temp/'bbot-github-receive.service'),'/etc/systemd/system/bbot-github-receive.service')
+        sudo('install','-m','644',str(temp/'bbot-github-receive.timer'),'/etc/systemd/system/bbot-github-receive.timer')
+        sudo('systemctl','daemon-reload');sudo('systemctl','enable','--now','bbot-github-receive.timer')
+        if service()!=before_pid:raise RuntimeError('R4_SERVICE_CHANGED_DURING_RECEIVER_INSTALL')
+        active=subprocess.run(['systemctl','is-active','bbot-github-receive.timer'],capture_output=True,text=True,check=True,timeout=10).stdout.strip()
+    except Exception:
+        try:sudo('systemctl','disable','--now','bbot-github-receive.timer')
+        except subprocess.CalledProcessError:pass
+        if hashlib.sha256(target.read_bytes()).hexdigest()==payload['runtime_sha256']:
+            rollback=target.with_name(target.name+'.github.rollback');rollback.write_bytes(old);os.replace(rollback,target)
+        if old_settings is None:settings.unlink(missing_ok=True)
+        else:settings.write_bytes(old_settings)
+        raise
+    for path in sorted(backup.glob('strategy_runtime.*.py'),key=lambda p:p.stat().st_mtime,reverse=True)[2:]:path.unlink()
+print(json.dumps({'receiver':'AWS_DIRECT_RECEIVER_ACTIVE','timer':active,'r4_pid':before_pid,'service_restart':False,'operating_config_changed':False,'database_opened':False,'automatic_registration_enabled':False,'receipt':result}))
+'''
+    command=['ssh','-o','BatchMode=yes','-o','ConnectTimeout=15','-o','ServerAliveInterval=5','-o','ServerAliveCountMax=3','-i',r'C:\my\han.pem','ec2-user@13.159.128.120','/home/ec2-user/bot/venv/bin/python -B -']
+    result=subprocess.run(command,input=remote,text=True,encoding='utf-8',capture_output=True,timeout=240)
+    if result.returncode:raise RuntimeError('SERVER_RECEIVER_INSTALL_FAILED:'+result.stderr[-1800:])
+    print(result.stdout.strip());print('CANONICAL_RELEASE_CHECKS_SNAPSHOT='+commit['sha'])
+    return 0
+
+
 def main():
 
     parser = argparse.ArgumentParser()
@@ -3089,10 +3203,14 @@ def main():
 
 
     parser.add_argument("--prepare-server",action="store_true")
+    parser.add_argument("--install-server-receiver",action="store_true")
     parser.add_argument("--connect-github",action="store_true")
     parser.add_argument("--code-ref")
     parser.add_argument("--github-check",action="store_true")
     args = parser.parse_args()
+    if args.install_server_receiver:
+        return install_server_receiver(args.code_ref)
+
     if args.prepare_server:
         return prepare_server()
     if args.connect_github:

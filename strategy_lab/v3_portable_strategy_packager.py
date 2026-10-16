@@ -104,7 +104,13 @@ def source_allowed(path):
         and path.suffix.lower() == ".py"
     )
 
+    # 기존 연구 책임 함수가 독립 실행 소스로 확인한 단일/재개발 버전.
+    pipeline_source=False
+    if path.parent in {(RESULTS/'generated_trials').resolve(),(RESULTS/'redeveloped_strategies').resolve()}:
+        import v3_strategy_research as research
+        pipeline_source=research._pipeline_source_portable(path.relative_to(ROOT).as_posix())
     return (
+        pipeline_source or
         within(
             path,
             GENERATED_COMBINATIONS,
@@ -1160,6 +1166,8 @@ def package_strategy(
     details = {}
 
     if (
+        "PORTABLE_GENERATED_SINGLE_V2" in text
+        or
         "PORTABLE_GENERATED_COMBINATION_V1"
         in text
         or
@@ -1193,6 +1201,10 @@ def package_strategy(
         details[
             "mode"
         ] = "PORTABLE_SAFE_GRAMMAR_COPY"
+
+    elif source.parent == (RESULTS/"redeveloped_strategies").resolve():
+        code=text
+        details["mode"]="PORTABLE_REDEVELOPED_COPY"
 
     elif (
         source.parent

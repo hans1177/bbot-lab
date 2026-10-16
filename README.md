@@ -66,3 +66,7 @@ R4 피드백의 `exit_fill_ids` 안에서 원장 생성식 `EXTERNAL_TRADE:종�
 목표 경로는 GitHub 연구 → AWS 직접 수신이며 PC 상시 중계는 사용하지 않습니다. `v3_auto_runtime_release.py --prepare-server`는 기존 SSH 호스트에서 한 번 실행하는 준비 명령입니다. AWS 전용 Ed25519 개인키는 AWS 밖으로 내보내지 않고 해당 비공개 저장소의 읽기 전용 배포키로 공개키만 등록합니다. GitHub 호스트 키는 공식 Ed25519 지문에 고정합니다. 필요한 경우 서버 Git 패키지를 설치합니다.
 
 서버에서 비공개 저장소를 직접 읽는 데 성공하면 허용된 Python 소스 여덟 개와 해시만 `aws-runtime-source` 브랜치에 보존합니다. 운영 설정·개인키·DB는 수집하지 않습니다. 운영 서비스 재시작이나 전략 자동등록은 이 준비 단계에서 실행하지 않습니다. 직접 수신·실행 검증은 이 최신 서버 기준을 확인한 후 진행합니다.
+
+### AWS direct reception
+
+`--prepare-server` establishes a read-only GitHub deploy key and captures the current runtime source. `--install-server-receiver --code-ref <commit>` installs the appended Runtime reception command and a 60-second AWS timer. It preserves the R4 PID, config, ledger and order path. Final-gated portable candidates are published to the private `runtime-candidates` branch and received into a bounded staging inbox. First-gate passes are excluded. Reception does not authorize registration: the server shadow and existing release validation gates remain required. The one-time installer captures the existing local release verifiers on private `release-checks` for Linux portability review; no keys, DB or config are exported.

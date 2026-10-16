@@ -8810,3 +8810,38 @@ def create_policy_canary_request(version_id):
 
 
 
+# ================= GitHub → 실행 서버 후보 인계 =================
+def export_runtime_candidates(output):
+    """기존 최종 gate/packager를 사용한다. 서버 등록 승인이나 운영 설정은 만들지 않는다."""
+    import hashlib,re
+    import v3_strategy_research as research
+    import v3_portable_strategy_packager as packager
+    out=Path(output).resolve()
+    if out.exists():raise RuntimeError('RUNTIME_HANDOFF_OUTPUT_EXISTS')
+    cv=governance.validate_constitution()
+    if cv.get('ok') is not True:raise RuntimeError('RUNTIME_HANDOFF_CONSTITUTION_INVALID')
+    rows=[];files={}
+    for tf in research.TF_ORDER:
+        excluded=set()
+        while len(rows)<32:
+            row=research._pipeline_local_shadow_choice(tf,excluded)
+            if not row:break
+            excluded.add(row['strategy_id'])
+            source=source_for_pipeline(row)
+            if source is None or hashlib.sha256(source.read_bytes()).hexdigest()!=row.get('source_sha256'):raise RuntimeError('RUNTIME_HANDOFF_SOURCE_HASH')
+            version=str(row.get('exact_strategy_version') or '')
+            strategy=str(row.get('strategy_id') or '')
+            if not re.fullmatch('[A-Z0-9_]{1,160}',strategy) or not re.fullmatch('[A-Za-z0-9_]{1,160}',version):raise RuntimeError('RUNTIME_HANDOFF_ID_INVALID')
+            name='artifacts/'+hashlib.sha256((strategy+'|'+tf+'|'+version).encode()).hexdigest()+'.py'
+            # Packaging happens only after exact source + final gates were checked.
+            out.mkdir(parents=True,exist_ok=True)
+            packaged=packager.package_strategy(source,out/name)
+            raw=(out/name).read_bytes()
+            if len(raw)>128*1024:raise RuntimeError('RUNTIME_HANDOFF_ARTIFACT_LIMIT')
+            files[name]={'bytes':len(raw),'sha256':packaged['runtime_sha256']}
+            rows.append({'strategy_id':strategy,'timeframe':tf,'exact_strategy_version':version,'source_sha256':row['source_sha256'],'artifact':name,'runtime_sha256':packaged['runtime_sha256'],'research_evidence':row,'server_shadow_required':True,'approved_for_server_release':False})
+    manifest={'schema':'B_BOT_R4_RESEARCH_CANDIDATES_V1','source_commit':os.environ.get('GITHUB_SHA'),'source_run_id':os.environ.get('GITHUB_RUN_ID'),'constitution_hash':cv['constitution_hash'],'engine_sha256':hashlib.sha256(RUNNER.read_bytes()).hexdigest() if 'RUNNER' in globals() else hashlib.sha256((LAB/'run_strategy.py').read_bytes()).hexdigest(),'candidates':rows,'files':files,'automatic_registration_authorized':False}
+    raw=json.dumps(manifest,ensure_ascii=False,sort_keys=True,indent=2).encode()
+    if len(raw)>1024**2 or sum(item['bytes'] for item in files.values())>8*1024**2:raise RuntimeError('RUNTIME_HANDOFF_TOTAL_LIMIT')
+    out.mkdir(parents=True,exist_ok=True);(out/'MANIFEST.json').write_bytes(raw)
+    return {'status':'RUNTIME_CANDIDATES_EXPORTED','candidates':len(rows),'server_shadow_required':True,'orders_touched':False}
