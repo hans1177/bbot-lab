@@ -2982,6 +2982,96 @@ def connect_github(code_ref):
     return 0
 
 
+def prepare_server():
+    """서버 전용 읽기 키와 최신 소스 점검만 준비한다. 운영 파일·DB·서비스는 변경하지 않는다."""
+    import base64,re
+    if os.name!='nt':raise RuntimeError('RUN_FROM_EXISTING_WINDOWS_SSH_HOST')
+    key=Path(r'C:\my\han.pem')
+    if not key.is_file():raise RuntimeError('EXISTING_AWS_SSH_KEY_NOT_FOUND')
+    ssh=['ssh','-o','BatchMode=yes','-o','ConnectTimeout=15','-o','ServerAliveInterval=5','-o','ServerAliveCountMax=3','-i',str(key),'ec2-user@13.159.128.120','/home/ec2-user/bot/venv/bin/python -B -']
+    def remote(source):
+        result=subprocess.run(ssh,input=source,text=True,encoding='utf-8',capture_output=True,timeout=180)
+        if result.returncode:raise RuntimeError('AWS_PREFLIGHT_FAILED:'+result.stderr[-1500:])
+        return json.loads(result.stdout)
+    def github(path,data=None,optional=False):
+        command=['gh','api','repos/hans1177/bbot-lab'+path]
+        if data is not None:command+=['--method','POST' if not path.startswith('/git/refs/heads/') else 'PATCH','--input','-']
+        result=subprocess.run(command,input=json.dumps(data) if data is not None else None,text=True,encoding='utf-8',capture_output=True,timeout=90)
+        if result.returncode:
+            if optional and '404' in result.stderr:return None
+            raise RuntimeError('GITHUB_SETUP_FAILED:'+result.stderr[-1000:])
+        return json.loads(result.stdout)
+    if github('').get('private') is not True:raise RuntimeError('PRIVATE_RESEARCH_REPOSITORY_REQUIRED')
+    auth=remote('''import base64,hashlib,json,os,shutil,subprocess
+from pathlib import Path
+if not shutil.which('git'):
+    manager=next((name for name in ('dnf','yum') if shutil.which(name)),None)
+    if not manager:raise RuntimeError('SERVER_GIT_INSTALLER_NOT_FOUND')
+    subprocess.run(['sudo','-n',manager,'-y','install','git'],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True,timeout=120)
+home=Path('/home/ec2-user/.ssh');home.mkdir(mode=0o700,exist_ok=True)
+key=home/'bbot_lab_read';host=home/'bbot_lab_hosts'
+if key.is_symlink() or key.with_suffix('.pub').is_symlink() or host.is_symlink():raise RuntimeError('AUTH_PATH_SYMLINK_FORBIDDEN')
+if not key.exists():subprocess.run(['ssh-keygen','-q','-t','ed25519','-N','','-C','bbot-lab-read','-f',str(key)],check=True,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=15)
+os.chmod(key,0o600)
+public=subprocess.run(['ssh-keygen','-y','-f',str(key)],check=True,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=15).stdout.strip()
+if not public.startswith('ssh-ed25519 '):raise RuntimeError('READ_KEY_TYPE_INVALID')
+public_host='AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl'
+fingerprint='SHA256:'+base64.b64encode(hashlib.sha256(base64.b64decode(public_host)).digest()).decode().rstrip('=')
+if fingerprint!='SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU':raise RuntimeError('GITHUB_HOST_PIN_INVALID')
+host.write_text('github.com ssh-ed25519 '+public_host+chr(10),encoding='ascii');os.chmod(host,0o600)
+print(json.dumps({'public_key':public,'github_host_fingerprint':fingerprint,'git_ready':bool(shutil.which('git'))}))
+''')
+    public=str(auth.get('public_key') or '')
+    if not re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/=]+',public):raise RuntimeError('AWS_PUBLIC_KEY_INVALID')
+    existing=github('/keys?per_page=100')
+    found=next((row for row in existing if ' '.join(str(row.get('key') or '').split()[:2])==public),None)
+    if found and found.get('read_only') is not True:raise RuntimeError('EXISTING_DEPLOY_KEY_IS_NOT_READ_ONLY')
+    registered=found or github('/keys',{'title':'bbot-runtime-read','key':public,'read_only':True})
+    if registered.get('read_only') is not True:raise RuntimeError('DEPLOY_KEY_READ_ONLY_NOT_VERIFIED')
+    report=remote('''import base64,hashlib,json,os,re,subprocess
+from pathlib import Path
+root=Path('/home/ec2-user/bot')
+env=os.environ.copy();env['GIT_SSH_COMMAND']='ssh -i /home/ec2-user/.ssh/bbot_lab_read -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/home/ec2-user/.ssh/bbot_lab_hosts'
+result=subprocess.run(['git','ls-remote','git@github.com:hans1177/bbot-lab.git','refs/heads/main','refs/heads/research-state'],env=env,capture_output=True,text=True,timeout=60)
+if result.returncode:raise RuntimeError('AWS_GITHUB_READ_FAILED:'+result.stderr[-1000:])
+refs={line.split()[1]:line.split()[0] for line in result.stdout.splitlines() if line.strip()}
+if not all(name in refs for name in ('refs/heads/main','refs/heads/research-state')):raise RuntimeError('RESEARCH_REFS_MISSING')
+service=subprocess.run(['systemctl','is-active','r4-runtime.service'],capture_output=True,text=True,timeout=10).stdout.strip()
+names=('r4_runtime_service.py','strategy_runtime.py','strategy_leg_ledger.py','multi_strategy_runtime.py','r4_exchange_adapter.py','r4_user_stream.py','assist/cycle.py','assist/strategy_registry.py')
+files={}
+patterns=(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',rb'(?:AKIA|ASIA)[A-Z0-9]{16}',rb'gh[pousr]_[A-Za-z0-9]{30,}',rb'\\d{9,12}:[A-Za-z0-9_-]{35}')
+for name in names:
+    path=root/name
+    if path.is_symlink() or not path.is_file() or path.stat().st_size>512*1024:raise RuntimeError('SOURCE_SNAPSHOT_PATH_INVALID:'+name)
+    raw=path.read_bytes()
+    if any(re.search(pattern,raw) for pattern in patterns):raise RuntimeError('SOURCE_SNAPSHOT_CREDENTIAL_PATTERN:'+name)
+    files[name]={'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest(),'content':base64.b64encode(raw).decode()}
+print(json.dumps({'service':service,'refs':refs,'files':files,'operating_files_changed':False,'database_opened':False}))
+''')
+    if report.get('service')!='active':raise RuntimeError('R4_RUNTIME_NOT_ACTIVE')
+    allowed={'r4_runtime_service.py','strategy_runtime.py','strategy_leg_ledger.py','multi_strategy_runtime.py','r4_exchange_adapter.py','r4_user_stream.py','assist/cycle.py','assist/strategy_registry.py'}
+    if set(report.get('files') or {})!=allowed:raise RuntimeError('SOURCE_SNAPSHOT_FILE_SET_INVALID')
+    entries=[];hashes={}
+    for name,row in report['files'].items():
+        raw=base64.b64decode(row['content'],validate=True)
+        if len(raw)!=row['bytes'] or hashlib.sha256(raw).hexdigest()!=row['sha256']:raise RuntimeError('SOURCE_SNAPSHOT_HASH_INVALID')
+        compile(raw.decode('utf-8-sig'),name,'exec')
+        blob=github('/git/blobs',{'content':row['content'],'encoding':'base64'})
+        entries.append({'path':'runtime/'+name,'mode':'100644','type':'blob','sha':blob['sha']});hashes[name]=row['sha256']
+    receipt={'schema':'B_BOT_AWS_READ_ONLY_SOURCE_SNAPSHOT_V1','created_at':now(),'service':'active','files':hashes,'deploy_key_id':registered['id'],'deploy_key_read_only':True,'private_key_exported':False,'operating_files_changed':False,'database_opened':False}
+    entries.append({'path':'PREFLIGHT.json','mode':'100644','type':'blob','content':json.dumps(receipt,indent=2)})
+    old=github('/git/ref/heads/aws-runtime-source',optional=True)
+    parent=old['object']['sha'] if old else None
+    tree=github('/git/trees',{'tree':entries})
+    commit=github('/git/commits',{'message':'Read-only AWS runtime baseline for direct GitHub delivery','tree':tree['sha'],'parents':[parent] if parent else []})
+    if parent:github('/git/refs/heads/aws-runtime-source',{'sha':commit['sha'],'force':False})
+    else:github('/git/refs',{'ref':'refs/heads/aws-runtime-source','sha':commit['sha']})
+    verified=github('/git/ref/heads/aws-runtime-source')
+    if verified['object']['sha']!=commit['sha']:raise RuntimeError('SOURCE_SNAPSHOT_REF_NOT_VERIFIED')
+    print(json.dumps({'connection':'AWS_GITHUB_READ_ONLY_READY','source_snapshot_commit':commit['sha'],'runtime_service':'active','deploy_key_read_only':True,'operating_files_changed':False,'database_opened':False,'automatic_registration_enabled':False},ensure_ascii=True))
+    return 0
+
+
 def main():
 
     parser = argparse.ArgumentParser()
@@ -2998,10 +3088,13 @@ def main():
     )
 
 
+    parser.add_argument("--prepare-server",action="store_true")
     parser.add_argument("--connect-github",action="store_true")
     parser.add_argument("--code-ref")
     parser.add_argument("--github-check",action="store_true")
     args = parser.parse_args()
+    if args.prepare_server:
+        return prepare_server()
     if args.connect_github:
         return connect_github(args.code_ref)
     if args.github_check:
