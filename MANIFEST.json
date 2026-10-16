@@ -1,0 +1,10 @@
+{
+  "automatic_registration_authorized": false,
+  "candidates": [],
+  "constitution_hash": "fcf9a69d6100b8638cf031680eef1b5e234ae10edd66f808e2c08631edced76a",
+  "engine_sha256": "3c665f886a02757e3b35444b437312385d88790c47c6346e90c64dfc0a5a86ed",
+  "files": {},
+  "schema": "B_BOT_R4_RESEARCH_CANDIDATES_V1",
+  "source_commit": "88ab8ee0fc12803d7bae727fdc44a98d8be97409",
+  "source_run_id": "38854974278"
+}
