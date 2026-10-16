@@ -2434,6 +2434,12 @@ def recover_hold_if_authorized():
 
 def tick(cloud_validation=False):
 
+    if not cloud_validation and os.name=='nt':
+        config_path=ROOT/'strategy_lab/lab_config.json'
+        config=json.loads(config_path.read_text(encoding='utf-8-sig')) if config_path.exists() else {}
+        if (config.get('github_research') or {}).get('release_owner')=='AWS_DIRECT':
+            state('AWS_DIRECT_OWNER',release_applied=False)
+            return 'AWS_DIRECT_OWNER'
     roadmap_policy()
     if cloud_validation:
         if os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('GITHUB_REPOSITORY')!='hans1177/bbot-lab' or ROOT.resolve()==Path('/home/ec2-user/bot'):
@@ -3280,6 +3286,28 @@ def install_server_receiver(code_ref, enable_feedback=False, enable_registration
         return json.loads(proc.stdout)
     if api('').get('private') is not True:raise RuntimeError('PRIVATE_REPOSITORY_REQUIRED')
     if enable_registration and not enable_feedback:raise RuntimeError('REGISTRATION_REQUIRES_LIVE_FEEDBACK')
+    if enable_registration:
+        # 이전 PC 중계 작업자가 적용 중이면 종료하지 않고 인계를 중단한다.
+        if REQUEST.exists():raise RuntimeError('LOCAL_RUNTIME_REQUEST_PENDING_HANDOFF_BLOCKED')
+        root_literal=str(ROOT).replace("'","''")
+        stop_script=r"$ErrorActionPreference='Stop'; $root='"+root_literal+r"'; $all=@(Get-CimInstance Win32_Process); $busy=@($all | Where-Object { $_.ProcessId -ne $PID -and $_.Name -match '^(powershell|pwsh)(\.exe)?$' -and $_.CommandLine -like '*-File*strategy_runtime_sync.ps1*' }); if($busy.Count){throw 'LOCAL_RUNTIME_SYNC_BUSY'}; $workers=@($all | Where-Object { $_.Name -match '^python(w)?\.exe$' -and $_.CommandLine -like ('*'+$root+'\strategy_lab\v3_auto_runtime_release.py*') }); foreach($worker in $workers){try{Stop-Process -Id $worker.ProcessId -Force -ErrorAction Stop}catch{if(Get-Process -Id $worker.ProcessId -ErrorAction SilentlyContinue){throw}}}; Write-Output ('LOCAL_RELEASE_WORKERS_STOPPED='+$workers.Count)"
+        stopped=subprocess.run(['powershell.exe','-NoProfile','-Command',stop_script],capture_output=True,text=True,encoding='utf-8',timeout=30)
+        if stopped.returncode:raise RuntimeError('LOCAL_RELEASE_HANDOFF_BUSY:'+stopped.stderr[-500:])
+        if REQUEST.exists():raise RuntimeError('LOCAL_RUNTIME_REQUEST_APPEARED_HANDOFF_BLOCKED')
+        local_worker=ROOT/'strategy_lab/v3_auto_runtime_release.py'
+        source=api('/contents/strategy_lab/v3_auto_runtime_release.py?ref='+code_ref)
+        raw=base64.b64decode(source['content']);compile(raw.decode('utf-8-sig'),str(local_worker),'exec')
+        backup=local_worker.with_suffix('.py.before_aws_direct.bak')
+        if local_worker.is_symlink() or backup.is_symlink():raise RuntimeError('LOCAL_WORKER_SYMLINK')
+        if not backup.exists():backup.write_bytes(local_worker.read_bytes())
+        temporary=local_worker.with_suffix('.py.aws.tmp');temporary.write_bytes(raw);os.replace(temporary,local_worker)
+        config_path=ROOT/'strategy_lab/lab_config.json'
+        config=json.loads(config_path.read_text(encoding='utf-8-sig'))
+        connection=config.setdefault('github_research',{})
+        if connection.get('repository') not in (None,'hans1177/bbot-lab'):raise RuntimeError('LOCAL_RESEARCH_REPOSITORY_CONFLICT')
+        connection.update(enabled=True,repository='hans1177/bbot-lab',release_owner='AWS_DIRECT')
+        atomic_json(config_path,config)
+        print(stopped.stdout.strip());print('LOCAL_RELEASE_OWNER=AWS_DIRECT; LOCAL_RESEARCH_OWNER=GITHUB')
     if enable_feedback:
         key_script=r'''import json,os,subprocess
 from pathlib import Path

@@ -30,3 +30,7 @@ class CloudReleaseTests(unittest.TestCase):
         with patch.dict(os.environ,{'GITHUB_ACTIONS':'false'}):
             with self.assertRaisesRegex(RuntimeError,'ISOLATED_GITHUB'):self.tick(cloud_validation=True)
         self.pull.assert_not_called()
+    def test_old_pc_worker_stays_idle_after_aws_handoff(self):
+        config_path=self.root/'strategy_lab/lab_config.json';config_path.write_text(json.dumps({'github_research':{'release_owner':'AWS_DIRECT'}}))
+        self.ns['os']=types.SimpleNamespace(name='nt',environ={})
+        self.assertEqual(self.tick(),'AWS_DIRECT_OWNER');self.pull.assert_not_called();self.apply.assert_not_called();self.ns['roadmap_policy'].assert_not_called()
