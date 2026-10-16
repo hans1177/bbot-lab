@@ -51,5 +51,13 @@ class FeedbackImportTests(unittest.TestCase):
         self.config['api_key']='never-import-credential'
         with self.assertRaisesRegex(RuntimeError,'CREDENTIAL_FIELD'):self.call()
         self.assertFalse((self.root/'strategy_config.json').exists())
+    def test_server_bars_are_imported_only_after_fixed_window_research(self):
+        workflow=(ROOT/'.github/workflows/research-run.yml').read_text()
+        research=workflow.index('      - name: Run existing research controller')
+        feedback=workflow.index('      - name: Read fresh server market feedback')
+        handoff=workflow.index('      - name: Prepare runtime candidate handoff')
+        self.assertLess(research,feedback)
+        self.assertLess(feedback,handoff)
+
     def test_existing_request_preserved_without_network_calls(self):
         raw=b'{"approved_for_server_release":true}';self.request.write_bytes(raw);self.assertEqual(self.call()['status'],'WAIT_EXISTING_RUNTIME_REQUEST');self.assertEqual(self.request.read_bytes(),raw);self.assertEqual(self.calls,[])

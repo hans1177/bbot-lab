@@ -173,11 +173,6 @@ jobs:
               print('CHECKPOINT_RESTORED',receipt['source_run_id'])
           else:
               print('FRESH_RESEARCH_NO_LOCAL_QUEUE_IMPORTED')
-      - name: Read fresh server market feedback
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUNNER_DRY_RUN: '1'
-        run: python "$BBOT_LOCAL_ROOT/strategy_lab/v3_auto_runtime_release.py" --pull-runtime-feedback
       - name: Existing controller preparation check
         run: |
           python "$BBOT_LOCAL_ROOT/strategy_lab/research_controller.py" --mode managed-dry-run --skip-server-health > "$RUNNER_TEMP/research-preflight.json"
@@ -205,6 +200,11 @@ jobs:
           if any(reason in {'RUN_STRATEGY_FAIL','RESULT_NOT_FOUND'} for row in rows for reason in reasons(row)):raise RuntimeError('RESEARCH_EXECUTION_FAILED_CHECK_PRIVATE_EVIDENCE')
           print('RESEARCH_EXECUTION_AND_RESULTS_RECORDED; STRATEGY_QUALIFICATION_IS_SEPARATE')
           PY
+      - name: Read fresh server market feedback
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNNER_DRY_RUN: '1'
+        run: python "$BBOT_LOCAL_ROOT/strategy_lab/v3_auto_runtime_release.py" --pull-runtime-feedback
       - name: Prepare runtime candidate handoff
         if: steps.research.outcome == 'success'
         shell: python
