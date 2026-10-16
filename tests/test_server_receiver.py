@@ -60,6 +60,11 @@ class ReceiverTests(unittest.TestCase):
         # The actual AWS byte prefix, including its final newlines, is preserved.
         self.assertEqual(hashlib.sha256(prefix).hexdigest(),'1cb77962db51e26fccc83cdcbb88b5f801fb0c2dd0d5b29aef3a7637bf486cfb')
 class InstallerTests(unittest.TestCase):
+    def test_research_workspace_is_outside_checked_out_runtime_source(self):
+        import yaml
+        workflow=yaml.safe_load((ROOT/'.github/workflows/research-run.yml').read_text())
+        self.assertEqual(workflow['jobs']['research']['env']['BBOT_LOCAL_ROOT'],'${{ runner.temp }}/research-workspace')
+
     def test_embedded_remote_script_compiles_and_does_not_restart_r4(self):
         source=(ROOT/'strategy_lab/v3_auto_runtime_release.py').read_text();tree=ast.parse(source)
         fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='install_server_receiver')
