@@ -2982,7 +2982,7 @@ def connect_github(code_ref):
     return 0
 
 
-def prepare_server():
+def prepare_server(release_context=False):
     """서버 전용 읽기 키와 최신 소스 점검만 준비한다. 운영 파일·DB·서비스는 변경하지 않는다."""
     import base64,re
     if os.name!='nt':raise RuntimeError('RUN_FROM_EXISTING_WINDOWS_SSH_HOST')
@@ -3002,6 +3002,73 @@ def prepare_server():
             raise RuntimeError('GITHUB_SETUP_FAILED:'+result.stderr[-1000:])
         return json.loads(result.stdout)
     if github('').get('private') is not True:raise RuntimeError('PRIVATE_RESEARCH_REPOSITORY_REQUIRED')
+    if release_context:
+        report=remote(r'''import ast,base64,hashlib,json,re,subprocess
+from pathlib import Path
+root=Path('/home/ec2-user/bot')
+patterns=(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',rb'(?:AKIA|ASIA)[A-Z0-9]{16}',rb'gh[pousr]_[A-Za-z0-9]{30,}',rb'\d{9,12}:[A-Za-z0-9_-]{35}',rb'(?i)["\x27]?(?:api[_-]?key|api[_-]?secret|secret[_-]?key|password|access[_-]?token)["\x27]?\s*[:=]\s*["\x27][A-Za-z0-9_/-]{16,}["\x27]')
+queue=['runner.py','order.py','risk_engine.py','candidate.py','capital_allocator.py','account_mode.py','late_entry.py','collector.py','strategy_runtime.py','r4_runtime_service.py','strategy_leg_ledger.py','multi_strategy_runtime.py','r4_exchange_adapter.py','r4_user_stream.py','assist/daemon.py','assist/cycle.py','assist/strategy_registry.py']
+files={};missing=[];blocked=[]
+while queue:
+    name=queue.pop(0)
+    if name in files or name in missing or name in blocked:continue
+    path=root/name
+    if name in ('config.py','secrets.py','credentials.py'):blocked.append(name);continue
+    if path.is_symlink() or not path.is_file():missing.append(name);continue
+    if len(files)>=96 or path.stat().st_size>1024**2:raise RuntimeError('RELEASE_SOURCE_SNAPSHOT_LIMIT')
+    raw=path.read_bytes()
+    if any(re.search(pattern,raw) for pattern in patterns):raise RuntimeError('RELEASE_SOURCE_CREDENTIAL_PATTERN:'+name)
+    tree=ast.parse(raw.decode('utf-8-sig'),filename=name)
+    files[name]={'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest(),'content':base64.b64encode(raw).decode()}
+    for node in ast.walk(tree):
+        if isinstance(node,ast.Import):modules=[alias.name for alias in node.names]
+        elif isinstance(node,ast.ImportFrom):
+            prefix=list(Path(name).parent.parts)
+            if node.level:
+                if node.level>len(prefix):continue
+                prefix=prefix[:len(prefix)-node.level+1]
+                base='.'.join(prefix+([node.module] if node.module else []))
+            else:base=node.module or ''
+            modules=([base] if base else [])+[base+'.'+alias.name for alias in node.names if base and alias.name!='*']
+        else:modules=[]
+        for module in modules:
+            if module.startswith('strategy_lab'):continue
+            for relative in (module.replace('.','/')+'.py',module.replace('.','/')+'/__init__.py'):
+                if (root/relative).is_file() and relative not in files:queue.append(relative)
+config=root/'strategy_config.json';raw=config.read_bytes();json.loads(raw.decode('utf-8-sig'))
+if config.is_symlink() or len(raw)>1024**2 or any(re.search(pattern,raw) for pattern in patterns):raise RuntimeError('RELEASE_CONFIG_SNAPSHOT_UNSAFE')
+files['strategy_config.json']={'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest(),'content':base64.b64encode(raw).decode()}
+if sum(row['bytes'] for row in files.values())>16*1024**2:raise RuntimeError('RELEASE_SOURCE_TOTAL_LIMIT')
+service=subprocess.run(['systemctl','is-active','r4-runtime.service'],capture_output=True,text=True,timeout=10).stdout.strip()
+print(json.dumps({'service':service,'files':files,'missing':missing,'blocked':blocked,'operating_files_changed':False,'database_opened':False}))
+''')
+        if report.get('service')!='active':raise RuntimeError('R4_RUNTIME_NOT_ACTIVE')
+        frozen={'runner.py':'4926850cabce4d2659d6863032ac9630aaf30c9e074483cc5f38457ab35bc160','order.py':'513e85ab9935e8ea107f5f26dcb359f382c8deddc63c90d8bcf80348e45ec86c','risk_engine.py':'768aaa01735b82ef2705a186f244fbe3064954888d53f3546b09d05d49280fa6','candidate.py':'b33cb689602f9dd2c1287ce6ce78c175fb38b4f7c90d9d5d695a34e721d423ac'}
+        files=report.get('files') or {};entries=[];hashes={};uploads={}
+        for name,row in files.items():
+            if not re.fullmatch(r'[A-Za-z0-9_/]+\.py|strategy_config\.json',name) or '..' in name or name.startswith(('/','strategy_lab/')):raise RuntimeError('RELEASE_SOURCE_PATH_INVALID')
+            raw=base64.b64decode(row['content'],validate=True)
+            if len(raw)!=row['bytes'] or hashlib.sha256(raw).hexdigest()!=row['sha256']:raise RuntimeError('RELEASE_SOURCE_HASH_INVALID')
+            if name in frozen and row['sha256']!=frozen[name]:raise RuntimeError('FROZEN_CORE_CHANGED:'+name)
+            if name.endswith('.py'):compile(raw.decode('utf-8-sig'),name,'exec')
+            uploads['runtime/'+name]=row['content'];hashes[name]=row['sha256']
+        if not set(frozen)<=set(files):raise RuntimeError('FROZEN_SOURCE_MISSING')
+        for name in ('sync_base_to_server.ps1','ENABLE_SERVER_SYNC_AFTER_LOCAL_PASS.ps1','LOCAL_V3_TEST.ps1'):
+            path=ROOT/name
+            if path.is_symlink() or not path.is_file() or path.stat().st_size>1024**2:raise RuntimeError('LOCAL_RELEASE_SOURCE_MISSING:'+name)
+            raw=path.read_bytes()
+            if any(re.search(pattern,raw) for pattern in (rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',rb'(?:AKIA|ASIA)[A-Z0-9]{16}',rb'gh[pousr]_[A-Za-z0-9]{30,}')):raise RuntimeError('LOCAL_RELEASE_SOURCE_CREDENTIAL_PATTERN:'+name)
+            uploads['local/'+name]=base64.b64encode(raw).decode();hashes['local/'+name]=hashlib.sha256(raw).hexdigest()
+        for name,content in uploads.items():
+            blob=github('/git/blobs',{'content':content,'encoding':'base64'});entries.append({'path':name,'mode':'100644','type':'blob','sha':blob['sha']})
+        entries.append({'path':'CONTEXT.json','mode':'100644','type':'blob','content':json.dumps({'schema':'B_BOT_RELEASE_CONTEXT_V1','files':hashes,'missing':report.get('missing'),'blocked':report.get('blocked'),'created_at':now(),'database_opened':False,'operating_files_changed':False})})
+        old=github('/git/ref/heads/release-context',optional=True);parent=old['object']['sha'] if old else None
+        tree=github('/git/trees',{'tree':entries});commit=github('/git/commits',{'message':'Capture read-only canonical release dependencies','tree':tree['sha'],'parents':[parent] if parent else []})
+        if parent:github('/git/refs/heads/release-context',{'sha':commit['sha'],'force':False})
+        else:github('/git/refs',{'ref':'refs/heads/release-context','sha':commit['sha']})
+        if github('/git/ref/heads/release-context')['object']['sha']!=commit['sha']:raise RuntimeError('RELEASE_CONTEXT_REF_VERIFY')
+        print(json.dumps({'release_context_commit':commit['sha'],'runtime_source_files':len(files),'frozen_core_verified':True,'missing':report.get('missing'),'blocked':report.get('blocked'),'operating_files_changed':False,'database_opened':False,'automatic_registration_enabled':False},ensure_ascii=True))
+        return 0
     auth=remote('''import base64,hashlib,json,os,shutil,subprocess
 from pathlib import Path
 if not shutil.which('git'):
@@ -3203,6 +3270,7 @@ def main():
 
 
     parser.add_argument("--prepare-server",action="store_true")
+    parser.add_argument("--prepare-release-context",action="store_true")
     parser.add_argument("--install-server-receiver",action="store_true")
     parser.add_argument("--connect-github",action="store_true")
     parser.add_argument("--code-ref")
@@ -3211,6 +3279,8 @@ def main():
     if args.install_server_receiver:
         return install_server_receiver(args.code_ref)
 
+    if args.prepare_release_context:
+        return prepare_server(release_context=True)
     if args.prepare_server:
         return prepare_server()
     if args.connect_github:
