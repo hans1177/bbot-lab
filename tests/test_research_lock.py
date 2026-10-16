@@ -1,3 +1,4 @@
+# 파일명: tests/test_research_lock.py
 import ast
 import contextlib
 import fcntl
@@ -6,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -18,9 +20,9 @@ class ResearchLockTests(unittest.TestCase):
         body = ast.unparse(fn)
         lock_path = str(Path(self.temp.name) / 'research_controller.lock')
         self.ns = dict(contextmanager=contextlib.contextmanager, LOCK=Path(lock_path),
-                       os=os, fcntl=fcntl, msvcrt=None)
+                       os=os, fcntl=fcntl, msvcrt=None, time=time)
         exec(body, self.ns)
-        self.prefix = ('import os,fcntl\nfrom pathlib import Path\n'
+        self.prefix = ('import os,fcntl,time\nfrom pathlib import Path\n'
                        'from contextlib import contextmanager\nmsvcrt=None\nLOCK=Path('
                        + repr(lock_path) + ')\n' + body)
         self.child = self.prefix + '\ntry:\n with lock():print("ACQUIRED")\nexcept RuntimeError as e:print(str(e))\n'
@@ -53,3 +55,11 @@ class ResearchLockTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'RESEARCH_LOCK_BACKEND_UNAVAILABLE'):
             with self.ns['lock']():
                 self.fail('lock bypass')
+
+    def test_wait_timeout_preserves_exclusion(self):
+        with self.ns['lock']():
+            started = time.monotonic()
+            with self.assertRaisesRegex(RuntimeError, 'RESEARCH_ALREADY_RUNNING'):
+                with self.ns['lock'](wait_seconds=0.1):
+                    self.fail('lock bypass')
+            self.assertGreaterEqual(time.monotonic() - started, 0.1)

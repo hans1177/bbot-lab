@@ -81,7 +81,7 @@ def load(path: Path, default):
 
 
 @contextmanager
-def lock():
+def lock(wait_seconds=0):
     """기존 연구 잠금을 Windows와 Linux에서 동일하게 배타적으로 획득한다."""
     LOCK.parent.mkdir(parents=True, exist_ok=True)
     f = LOCK.open("a+b")
@@ -94,17 +94,27 @@ def lock():
             f.write(b"0")
             f.flush()
             f.seek(0)
-            try:
-                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
-            except OSError as error:
-                raise RuntimeError("RESEARCH_ALREADY_RUNNING") from error
+            deadline = time.monotonic() + wait_seconds
+            while True:
+                try:
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as error:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("RESEARCH_ALREADY_RUNNING") from error
+                    time.sleep(0.2)
         else:
             if fcntl is None:
                 raise RuntimeError("RESEARCH_LOCK_BACKEND_UNAVAILABLE")
-            try:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as error:
-                raise RuntimeError("RESEARCH_ALREADY_RUNNING") from error
+            deadline = time.monotonic() + wait_seconds
+            while True:
+                try:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError as error:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("RESEARCH_ALREADY_RUNNING") from error
+                    time.sleep(0.2)
         acquired = True
         yield
     finally:
@@ -756,6 +766,12 @@ def managed_dry_run(include_inputs: bool = False, export_inputs=None) -> dict:
             snapshot_started_at = now()
             snapshot_paths = {}
             source_fingerprints = {}
+            # 두 파일은 연구 체크포인트가 아닌 로컬 상태 관측값이다.
+            observation_paths = {
+                LAB / 'results' / 'master_handoff_system_latest.json',
+                LAB / 'results' / 'v3' / 'collector_heartbeat.json',
+            }
+            observation_receipts = {}
             for path in sorted(paths):
                 if path.is_symlink() or not path.resolve().is_relative_to(ROOT.resolve()):
                     raise RuntimeError('EXPORT_PATH_OUTSIDE_RESEARCH_ROOT')
@@ -764,16 +780,39 @@ def managed_dry_run(include_inputs: bool = False, export_inputs=None) -> dict:
                     raise RuntimeError('EXPORT_SINGLE_FILE_EXCEEDS_512_MIB')
                 source_fingerprints[path] = (before.st_size, before.st_mtime_ns, before.st_ino)
             for index, path in enumerate(sorted(paths)):
-                raw = path.read_bytes()
-                after = path.stat()
-                signature = (after.st_size, after.st_mtime_ns, after.st_ino)
-                if signature != source_fingerprints[path] or len(raw) != after.st_size:
-                    raise RuntimeError('EXPORT_INPUT_CHANGED_RETRY:' + path.relative_to(ROOT).as_posix())
+                if path in observation_paths:
+                    # 원본은 보존하고 관측 파일별 안정된 JSON 바이트만 인계한다.
+                    for attempt in range(5):
+                        before = path.stat()
+                        if before.st_size > 512 * 1024**2:
+                            raise RuntimeError('EXPORT_SINGLE_FILE_EXCEEDS_512_MIB')
+                        raw = path.read_bytes()
+                        after = path.stat()
+                        stable = (before.st_size, before.st_mtime_ns, before.st_ino) == (after.st_size, after.st_mtime_ns, after.st_ino)
+                        try:
+                            observed = json.loads(raw.decode('utf-8-sig'))
+                        except (UnicodeError, ValueError):
+                            observed = None
+                        if stable and len(raw) == after.st_size and isinstance(observed, dict):
+                            break
+                        time.sleep(0.05)
+                    else:
+                        raise RuntimeError('EXPORT_OBSERVATION_UNSTABLE_RETRY:' + path.relative_to(ROOT).as_posix())
+                    observation_receipts[path.relative_to(ROOT).as_posix()] = {
+                        'captured_at': now(), 'sha256': hashlib.sha256(raw).hexdigest(),
+                        'consistency': 'PER_FILE_OBSERVATION_ONLY', 'freshness_claimed': False,
+                    }
+                else:
+                    raw = path.read_bytes()
+                    after = path.stat()
+                    signature = (after.st_size, after.st_mtime_ns, after.st_ino)
+                    if signature != source_fingerprints[path] or len(raw) != after.st_size:
+                        raise RuntimeError('EXPORT_INPUT_CHANGED_RETRY:' + path.relative_to(ROOT).as_posix())
                 frozen = Path(snapshot_dir) / str(index)
                 frozen.write_bytes(raw)
                 snapshot_paths[path] = frozen
             for path, signature in source_fingerprints.items():
-                if path in candle_paths:
+                if path in candle_paths or path in observation_paths:
                     continue
                 current = path.stat()
                 if signature != (current.st_size, current.st_mtime_ns, current.st_ino):
@@ -841,6 +880,7 @@ def managed_dry_run(include_inputs: bool = False, export_inputs=None) -> dict:
             os.close(fd)
             manifest = {'schema': 'B_BOT_RESEARCH_INPUT_HANDOFF_V1', 'created_at': now(),
                         'snapshot_started_at': snapshot_started_at, 'snapshot_completed_at': snapshot_completed_at,
+                        'observation_receipts': observation_receipts,
                         'public_upload_allowed': False, 'automatic_promotion': False,
                         'orders_touched': False, 'files': {}}
             fingerprints = {}
@@ -1212,6 +1252,7 @@ def main() -> None:
     parser.add_argument("--skip-server-health", action="store_true")
     parser.add_argument("--check-inputs", action="store_true")
     parser.add_argument("--export-inputs", type=Path)
+    parser.add_argument("--export-lock-wait-seconds", type=int, default=0)
     parser.add_argument("--sleep-sec", type=int, default=60)
     parser.add_argument("--max-cycles", type=int, default=0)
     args = parser.parse_args()
@@ -1228,7 +1269,9 @@ def main() -> None:
     if args.mode == "managed-dry-run":
         if args.export_inputs is not None:
             try:
-                with lock():
+                if not 0 <= args.export_lock_wait_seconds <= 900:
+                    raise ValueError('EXPORT_LOCK_WAIT_OUT_OF_RANGE')
+                with lock(wait_seconds=args.export_lock_wait_seconds):
                     result = managed_dry_run(include_inputs=True, export_inputs=args.export_inputs)
             except RuntimeError as exc:
                 if str(exc) == "RESEARCH_ALREADY_RUNNING":

@@ -301,3 +301,67 @@ shutil.disk_usage=usage
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('EXPORT_SNAPSHOT_DISK_SPACE_REQUIRED', result.stderr)
         self.assertFalse(destination.exists())
+
+    def test_observation_updates_do_not_invalidate_checkpoint_capture(self):
+        import zipfile
+        self.fixture()
+        names = ['strategy_lab/results/master_handoff_system_latest.json', 'strategy_lab/results/v3/collector_heartbeat.json']
+        for name in names:
+            (self.root/name).write_text('{"updated_at_epoch":1}')
+        hook = '''real_write=Path.write_bytes
+changed=False
+def write(path,data):
+    global changed
+    result=real_write(path,data)
+    if not changed and path.parent.name.startswith('.research-snapshot-'):
+        changed=True
+        for name in ('strategy_lab/results/master_handoff_system_latest.json','strategy_lab/results/v3/collector_heartbeat.json'):
+            (root/name).write_text('{"updated_at_epoch":2}')
+    return result
+Path.write_bytes=write
+'''
+        result, destination = self.instrumented_export(hook)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(destination) as archive:
+            manifest = json.loads(archive.read('HANDOFF.json'))
+            for name in names:
+                raw = archive.read(name)
+                receipt = manifest['observation_receipts'][name]
+                self.assertEqual(receipt['sha256'], hashlib.sha256(raw).hexdigest())
+                self.assertEqual(receipt['consistency'], 'PER_FILE_OBSERVATION_ONLY')
+                self.assertFalse(receipt['freshness_claimed'])
+                self.assertEqual(json.loads(raw)['updated_at_epoch'], 2)
+
+    def test_observation_still_scanned_for_credentials(self):
+        self.fixture()
+        (self.root/'strategy_lab/results/v3/collector_heartbeat.json').write_text(json.dumps({'secret':'ghp_'+'Z'*36}))
+        result, destination = self.export()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('EXPORT_CREDENTIAL_PATTERN_DETECTED:strategy_lab/results/v3/collector_heartbeat.json', result.stderr)
+        self.assertFalse(destination.exists())
+
+    def test_malformed_observation_not_exported(self):
+        self.fixture()
+        (self.root/'strategy_lab/results/v3/collector_heartbeat.json').write_text('{incomplete')
+        result, destination = self.export()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('EXPORT_OBSERVATION_UNSTABLE_RETRY:', result.stderr)
+        self.assertFalse(destination.exists())
+
+    @unittest.skipIf(os.name == 'nt', 'Linux flock contention test')
+    def test_export_waits_for_existing_research_lock(self):
+        self.fixture()
+        hook = '''import subprocess,time
+lock=root/'strategy_lab/results/v3/research_controller.lock'
+ready=root/'lock_ready'
+child="import fcntl,time;from pathlib import Path;f=open("+repr(str(lock))+",'a+b');fcntl.flock(f,fcntl.LOCK_EX);Path("+repr(str(ready))+").write_text('ready');time.sleep(0.5)"
+process=subprocess.Popen([sys.executable,'-c',child])
+deadline=time.monotonic()+3
+while not ready.exists():
+    if time.monotonic()>deadline:raise RuntimeError('fixture lock not ready')
+    time.sleep(0.01)
+sys.argv+=['--export-lock-wait-seconds','3']
+'''
+        result, destination = self.instrumented_export(hook)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(destination.exists())
