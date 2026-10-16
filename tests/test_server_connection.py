@@ -60,6 +60,9 @@ class ServerConnectionTests(unittest.TestCase):
         self.assertFalse(self.ref)
     def test_remote_sources_compile_and_pin_official_host_key(self):
         for node in ast.walk(FN):
-            if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='remote':compile(ast.literal_eval(node.args[0]),'actual_remote','exec')
+            if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='remote':
+                expression=compile(ast.Expression(node.args[0]),'actual_remote_expression','eval')
+                source=eval(expression,{'__builtins__':{},'repr':repr,'list':list,'legacy':{'assist/strategies/div.py':'f'*64}})
+                compile(source,'actual_remote','exec')
         public='AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl'
         self.assertEqual('SHA256:'+base64.b64encode(hashlib.sha256(base64.b64decode(public)).digest()).decode().rstrip('='),'SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU')

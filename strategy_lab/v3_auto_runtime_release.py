@@ -3003,17 +3003,29 @@ def prepare_server(release_context=False):
         return json.loads(result.stdout)
     if github('').get('private') is not True:raise RuntimeError('PRIVATE_RESEARCH_REPOSITORY_REQUIRED')
     if release_context:
-        report=remote(r'''import ast,base64,hashlib,json,re,subprocess
+        import ast
+        checker=ast.parse((ROOT/'verify_v3.py').read_text(encoding='utf-8-sig'))
+        baseline=next((ast.literal_eval(node.value) for node in checker.body if isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id=='expected' for target in node.targets)),{})
+        legacy={name:digest for name,digest in baseline.items() if name.startswith('assist/strategies/')}
+        if len(legacy)!=7 or any(not re.fullmatch(r'assist/strategies/[a-z_]+\.py',name) or not re.fullmatch('[0-9a-f]{64}',digest) for name,digest in legacy.items()):raise RuntimeError('CANONICAL_LEGACY_BASELINE_MISSING')
+        report=remote('legacy_names='+repr(list(legacy))+'\n'+r'''import ast,base64,hashlib,json,re,subprocess
 from pathlib import Path
 root=Path('/home/ec2-user/bot')
 patterns=(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',rb'(?:AKIA|ASIA)[A-Z0-9]{16}',rb'gh[pousr]_[A-Za-z0-9]{30,}',rb'\d{9,12}:[A-Za-z0-9_-]{35}',rb'(?i)["\x27]?(?:api[_-]?key|api[_-]?secret|secret[_-]?key|password|access[_-]?token)["\x27]?\s*[:=]\s*["\x27][A-Za-z0-9_/-]{16,}["\x27]')
 queue=['runner.py','order.py','risk_engine.py','candidate.py','capital_allocator.py','account_mode.py','late_entry.py','collector.py','strategy_runtime.py','r4_runtime_service.py','strategy_leg_ledger.py','multi_strategy_runtime.py','r4_exchange_adapter.py','r4_user_stream.py','assist/daemon.py','assist/cycle.py','assist/strategy_registry.py']
+config=root/'strategy_config.json';config_raw=config.read_bytes();cfg=json.loads(config_raw.decode('utf-8-sig'))
+if config.is_symlink() or len(config_raw)>1024**2 or any(re.search(pattern,config_raw) for pattern in patterns):raise RuntimeError('RELEASE_CONFIG_SNAPSHOT_UNSAFE')
+queue+=legacy_names
+for row in (cfg.get('strategy_registry') or {}).values():
+    name=str((row or {}).get('file') or '')
+    if not re.fullmatch(r'[A-Za-z0-9_]+\.py',name):raise RuntimeError('REGISTRY_SOURCE_PATH_INVALID')
+    queue.append('assist/strategies/'+name)
 files={};missing=[];blocked=[]
 while queue:
     name=queue.pop(0)
     if name in files or name in missing or name in blocked:continue
     path=root/name
-    if name in ('config.py','secrets.py','credentials.py'):blocked.append(name);continue
+    if name in ('secrets.py','credentials.py'):blocked.append(name);continue
     if path.is_symlink() or not path.is_file():missing.append(name);continue
     if len(files)>=96 or path.stat().st_size>1024**2:raise RuntimeError('RELEASE_SOURCE_SNAPSHOT_LIMIT')
     raw=path.read_bytes()
@@ -3053,6 +3065,7 @@ print(json.dumps({'service':service,'files':files,'missing':missing,'blocked':bl
             if name.endswith('.py'):compile(raw.decode('utf-8-sig'),name,'exec')
             uploads['runtime/'+name]=row['content'];hashes[name]=row['sha256']
         if not set(frozen)<=set(files):raise RuntimeError('FROZEN_SOURCE_MISSING')
+        if any((files.get(name) or {}).get('sha256')!=digest for name,digest in legacy.items()):raise RuntimeError('LEGACY_FROZEN_SOURCE_MISSING_OR_CHANGED')
         for name in ('sync_base_to_server.ps1','ENABLE_SERVER_SYNC_AFTER_LOCAL_PASS.ps1','LOCAL_V3_TEST.ps1'):
             path=ROOT/name
             if path.is_symlink() or not path.is_file() or path.stat().st_size>1024**2:raise RuntimeError('LOCAL_RELEASE_SOURCE_MISSING:'+name)
@@ -3067,7 +3080,7 @@ print(json.dumps({'service':service,'files':files,'missing':missing,'blocked':bl
         if parent:github('/git/refs/heads/release-context',{'sha':commit['sha'],'force':False})
         else:github('/git/refs',{'ref':'refs/heads/release-context','sha':commit['sha']})
         if github('/git/ref/heads/release-context')['object']['sha']!=commit['sha']:raise RuntimeError('RELEASE_CONTEXT_REF_VERIFY')
-        print(json.dumps({'release_context_commit':commit['sha'],'runtime_source_files':len(files),'frozen_core_verified':True,'missing':report.get('missing'),'blocked':report.get('blocked'),'operating_files_changed':False,'database_opened':False,'automatic_registration_enabled':False},ensure_ascii=True))
+        print(json.dumps({'release_context_commit':commit['sha'],'runtime_source_files':len(files),'frozen_core_verified':True,'legacy_strategy_files_verified':len(legacy),'missing':report.get('missing'),'blocked':report.get('blocked'),'operating_files_changed':False,'database_opened':False,'automatic_registration_enabled':False},ensure_ascii=True))
         return 0
     auth=remote('''import base64,hashlib,json,os,shutil,subprocess
 from pathlib import Path
