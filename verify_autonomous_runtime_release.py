@@ -31,6 +31,11 @@ def worker_base_sync_forbidden(source):
     read_calls={'is_symlink','is_file','stat','read_bytes','RuntimeError','any','search','b64encode','decode','sha256','hexdigest'}
     for function in tree.body:
         if not isinstance(function,ast.FunctionDef) or function.name!='prepare_server':continue
+        for branch in ast.walk(function):
+            if not isinstance(branch,ast.If) or not isinstance(branch.test,ast.Name) or branch.test.id!='local_context':continue
+            copy_calls=read_calls|{'resolve','exists','get','Path','loads','read_text','fullmatch','startswith','items','append','mkdir','copy2','print','dumps'}
+            calls=[node.func.attr if isinstance(node.func,ast.Attribute) else node.func.id if isinstance(node.func,ast.Name) else '' for node in ast.walk(branch) if isinstance(node,ast.Call)]
+            if all(name in copy_calls for name in calls):allowed.update(id(node) for node in ast.walk(branch) if isinstance(node,ast.Constant) and isinstance(node.value,str) and 'sync_base_to_server.ps1' in node.value)
         for loop in ast.walk(function):
             if not isinstance(loop,ast.For):continue
             entries={id(node) for node in ast.walk(loop.iter) if isinstance(node,ast.Constant) and node.value=='sync_base_to_server.ps1'}

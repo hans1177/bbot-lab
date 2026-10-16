@@ -754,87 +754,196 @@ def receive_github_candidates():
     import hashlib,re,shutil,subprocess,time
     state=BASE/'state';settings_path=state/'r4_github_receiver.json'
     if settings_path.is_symlink():raise RuntimeError('GITHUB_RECEIVER_SETTINGS_SYMLINK')
-    settings=json.loads(settings_path.read_text(encoding='utf-8-sig')) if settings_path.exists() else {}
-    if settings.get('enabled') is not True:return {'status':'DISABLED','automatic_registration_enabled':False}
-    if settings.get('repository')!='hans1177/bbot-lab' or settings.get('branch')!='runtime-candidates':raise RuntimeError('GITHUB_RECEIVER_SOURCE_INVALID')
-    status_path=state/'r4_github_receiver_state.json'
-    previous=json.loads(status_path.read_text(encoding='utf-8-sig')) if status_path.exists() else {}
-    cache=state/'github_runtime.git';inbox=state/'github_candidates'
-    if cache.is_symlink() or inbox.is_symlink() or status_path.is_symlink():raise RuntimeError('GITHUB_RECEIVER_SYMLINK_FORBIDDEN')
-    env=os.environ.copy()
-    env['GIT_SSH_COMMAND']='ssh -i /home/ec2-user/.ssh/bbot_lab_read -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/home/ec2-user/.ssh/bbot_lab_hosts'
-    def git(*args):
-        result=subprocess.run(['git','--git-dir='+str(cache),*args],env=env,capture_output=True,timeout=45)
-        if result.returncode:raise RuntimeError('GITHUB_RECEIVER_GIT_FAILED')
-        return result.stdout
-    if not cache.exists():
-        state.mkdir(parents=True,exist_ok=True)
-        subprocess.run(['git','init','--bare',str(cache)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=10)
-    git('fetch','--depth=1','--no-tags','git@github.com:hans1177/bbot-lab.git','refs/heads/runtime-candidates:refs/remotes/origin/runtime-candidates')
-    revision=git('rev-parse','refs/remotes/origin/runtime-candidates').decode().strip()
-    if not re.fullmatch('[0-9a-f]{40}',revision):raise RuntimeError('GITHUB_RECEIVER_REF_INVALID')
-    if previous.get('contract')==[settings.get('constitution_hash'),settings.get('engine_sha256')] and previous.get('received_commit')==revision and previous.get('status') in {'WAIT_FINAL_RESEARCH','WAIT_SERVER_VALIDATION'}:
-        return {**previous,'unchanged':True}
-    names=git('ls-tree','-r','--name-only',revision).decode().splitlines()
-    if 'MANIFEST.json' not in names or len(names)>33:raise RuntimeError('GITHUB_RECEIVER_TREE_INVALID')
-    def blob(name,limit):
-        size=int(git('cat-file','-s',revision+':'+name).decode())
-        if size<0 or size>limit:raise RuntimeError('GITHUB_RECEIVER_BLOB_LIMIT')
-        raw=git('show',revision+':'+name)
-        if len(raw)!=size:raise RuntimeError('GITHUB_RECEIVER_BLOB_SIZE')
-        return raw
-    manifest=json.loads(blob('MANIFEST.json',1024**2))
-    if manifest.get('schema')!='B_BOT_R4_RESEARCH_CANDIDATES_V1' or manifest.get('automatic_registration_authorized') is not False:raise RuntimeError('GITHUB_RECEIVER_MANIFEST_INVALID')
-    if manifest.get('constitution_hash')!=settings.get('constitution_hash') or manifest.get('engine_sha256')!=settings.get('engine_sha256'):raise RuntimeError('GITHUB_RECEIVER_CONTRACT_MISMATCH')
-    if not re.fullmatch('[0-9a-f]{40}',str(manifest.get('source_commit') or '')):raise RuntimeError('GITHUB_RECEIVER_CODE_REF_INVALID')
-    rows=manifest.get('candidates');files=manifest.get('files')
-    if not isinstance(rows,list) or len(rows)>32 or not isinstance(files,dict):raise RuntimeError('GITHUB_RECEIVER_CANDIDATES_INVALID')
-    if set(names)!={'MANIFEST.json',*files}:raise RuntimeError('GITHUB_RECEIVER_FILE_SET_INVALID')
-    pending=[];versions=set();paths=set()
-    for row in rows:
-        version=str(row.get('exact_strategy_version') or '');strategy=str(row.get('strategy_id') or '');tf=str(row.get('timeframe') or '')
-        if not re.fullmatch('[A-Za-z0-9_]{1,160}',version) or not re.fullmatch('[A-Z0-9_]{1,160}',strategy) or tf not in ('30M','1H','6H','12H','1D','1W'):raise RuntimeError('GITHUB_RECEIVER_ID_INVALID')
-        if version in versions:raise RuntimeError('GITHUB_RECEIVER_DUPLICATE_VERSION')
-        versions.add(version)
-        if not re.fullmatch('[0-9a-f]{64}',str(row.get('source_sha256') or '')):raise RuntimeError('GITHUB_RECEIVER_SOURCE_HASH_INVALID')
-        evidence=row.get('research_evidence') or {}
-        if evidence.get('eligible') is not True or evidence.get('pipeline_stage')!='LOCAL_SHADOW_PENDING' or (evidence.get('full_validation_gate') or {}).get('pass') is not True or (evidence.get('sealed_final_blind_gate') or {}).get('pass') is not True or (evidence.get('sealed_final_blind_gate') or {}).get('next_stage')!='LOCAL_SHADOW_PENDING':raise RuntimeError('GITHUB_RECEIVER_FINAL_GATES_REQUIRED')
-        for field in ('strategy_id','timeframe','exact_strategy_version','source_sha256'):
-            if evidence.get(field)!=row.get(field):raise RuntimeError('GITHUB_RECEIVER_EVIDENCE_BINDING')
-        if row.get('server_shadow_required') is not True or row.get('approved_for_server_release') is not False:raise RuntimeError('GITHUB_RECEIVER_SHADOW_REQUIRED')
-        name=str(row.get('artifact') or '')
-        if not re.fullmatch(r'artifacts/[0-9a-f]{64}\.py',name) or name not in files or name in paths:raise RuntimeError('GITHUB_RECEIVER_ARTIFACT_PATH')
-        paths.add(name);raw=blob(name,128*1024);digest=hashlib.sha256(raw).hexdigest()
-        if digest!=row.get('runtime_sha256') or digest!=files[name].get('sha256') or len(raw)!=files[name].get('bytes'):raise RuntimeError('GITHUB_RECEIVER_ARTIFACT_HASH')
-        compile(raw.decode('utf-8-sig'),name,'exec')
-        if b'PORTABLE_RUNTIME_ARTIFACT_V1' not in raw[:4096]:raise RuntimeError('GITHUB_RECEIVER_ARTIFACT_NOT_PORTABLE')
-        candidate_id=hashlib.sha256((strategy+'|'+tf+'|'+version).encode()).hexdigest()
-        target=inbox/candidate_id
-        if target.is_symlink():raise RuntimeError('GITHUB_RECEIVER_TARGET_SYMLINK')
-        if target.exists() and (not (target/'runtime.py').is_file() or hashlib.sha256((target/'runtime.py').read_bytes()).hexdigest()!=digest):raise RuntimeError('GITHUB_RECEIVER_IMMUTABLE_VERSION_CONFLICT')
-        pending.append((candidate_id,target,raw,row))
-    if paths!=set(files):raise RuntimeError('GITHUB_RECEIVER_UNBOUND_ARTIFACT')
-    inbox.mkdir(parents=True,exist_ok=True)
-    for candidate_id,target,raw,row in pending:
-        if not target.exists():
-            import tempfile
-            temporary=Path(tempfile.mkdtemp(prefix='.incoming-',dir=str(inbox)))
-            try:
-                (temporary/'runtime.py').write_bytes(raw)
-                (temporary/'EVIDENCE.json').write_text(json.dumps({'candidate':row,'source_commit':manifest['source_commit'],'received_commit':revision},ensure_ascii=False,sort_keys=True),encoding='utf-8')
-                os.replace(temporary,target)
-            finally:
-                if temporary.exists():shutil.rmtree(temporary)
-    keep={row[0] for row in pending}
-    stale=sorted((path for path in inbox.iterdir() if path.is_dir() and not path.is_symlink() and path.name not in keep),key=lambda path:path.stat().st_mtime,reverse=True)
-    for path in stale[max(0,64-len(keep)):]:shutil.rmtree(path)
-    git('reflog','expire','--expire=now','--all');git('gc','--prune=now')
-    result={'schema':'B_BOT_R4_GITHUB_RECEIVER_STATE_V1','status':'WAIT_SERVER_VALIDATION' if pending else 'WAIT_FINAL_RESEARCH','contract':[settings.get('constitution_hash'),settings.get('engine_sha256')],'received_commit':revision,'source_commit':manifest['source_commit'],'candidate_ids':sorted(keep),'received_candidates':len(pending),'updated_at':int(time.time()),'automatic_registration_enabled':False,'orders_touched':False}
-    temporary=status_path.with_name(status_path.name+'.'+str(os.getpid())+'.tmp');temporary.write_text(json.dumps(result,sort_keys=True),encoding='utf-8');os.replace(temporary,status_path)
-    # 동일 head는 위에서 반환하여 반복 성공 로그를 만들지 않는다.
-    log=BASE/'logs/runner.log';log.parent.mkdir(parents=True,exist_ok=True)
-    with log.open('a',encoding='utf-8') as output:output.write('[주문][R4][GITHUB_RECEIVE] '+json.dumps(result,sort_keys=True)+'\n')
-    return result
+    import fcntl
+    state.mkdir(parents=True,exist_ok=True)
+    receiver_lock=(state/'r4_github_receiver.lock').open('a+b')
+    try:fcntl.flock(receiver_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BlockingIOError:
+        receiver_lock.close()
+        return {'status':'RECEIVER_BUSY','orders_touched':False,'automatic_registration_enabled':False}
+    try:
+        settings=json.loads(settings_path.read_text(encoding='utf-8-sig')) if settings_path.exists() else {}
+        if settings.get('enabled') is not True:return {'status':'DISABLED','automatic_registration_enabled':False}
+        if settings.get('repository')!='hans1177/bbot-lab' or settings.get('branch')!='runtime-candidates':raise RuntimeError('GITHUB_RECEIVER_SOURCE_INVALID')
+        status_path=state/'r4_github_receiver_state.json'
+        previous=json.loads(status_path.read_text(encoding='utf-8-sig')) if status_path.exists() else {}
+        cache=state/'github_runtime.git';inbox=state/'github_candidates'
+        if cache.is_symlink() or inbox.is_symlink() or status_path.is_symlink():raise RuntimeError('GITHUB_RECEIVER_SYMLINK_FORBIDDEN')
+        env=os.environ.copy()
+        env['GIT_SSH_COMMAND']='ssh -i /home/ec2-user/.ssh/bbot_lab_read -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/home/ec2-user/.ssh/bbot_lab_hosts'
+        def git(*args):
+            result=subprocess.run(['git','--git-dir='+str(cache),*args],env=env,capture_output=True,timeout=45)
+            if result.returncode:raise RuntimeError('GITHUB_RECEIVER_GIT_FAILED')
+            return result.stdout
+        if not cache.exists():
+            state.mkdir(parents=True,exist_ok=True)
+            subprocess.run(['git','init','--bare',str(cache)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=10)
+        git('fetch','--depth=1','--no-tags','git@github.com:hans1177/bbot-lab.git','refs/heads/runtime-candidates:refs/remotes/origin/runtime-candidates')
+        revision=git('rev-parse','refs/remotes/origin/runtime-candidates').decode().strip()
+        if not re.fullmatch('[0-9a-f]{40}',revision):raise RuntimeError('GITHUB_RECEIVER_REF_INVALID')
+        if (not settings.get('feedback_enabled') or 'feedback_candidates' in previous) and previous.get('contract')==[settings.get('constitution_hash'),settings.get('engine_sha256')] and previous.get('received_commit')==revision and previous.get('status') in {'WAIT_FINAL_RESEARCH','WAIT_SERVER_VALIDATION'}:
+            feedback=publish_github_feedback(previous.get('feedback_candidates') or [],revision) if settings.get('feedback_enabled') is True else {'status':'DISABLED'}
+            return {**previous,'unchanged':True,'feedback':feedback}
+        names=git('ls-tree','-r','--name-only',revision).decode().splitlines()
+        if 'MANIFEST.json' not in names or len(names)>33:raise RuntimeError('GITHUB_RECEIVER_TREE_INVALID')
+        def blob(name,limit):
+            size=int(git('cat-file','-s',revision+':'+name).decode())
+            if size<0 or size>limit:raise RuntimeError('GITHUB_RECEIVER_BLOB_LIMIT')
+            raw=git('show',revision+':'+name)
+            if len(raw)!=size:raise RuntimeError('GITHUB_RECEIVER_BLOB_SIZE')
+            return raw
+        manifest=json.loads(blob('MANIFEST.json',1024**2))
+        if manifest.get('schema')!='B_BOT_R4_RESEARCH_CANDIDATES_V1' or manifest.get('automatic_registration_authorized') is not False:raise RuntimeError('GITHUB_RECEIVER_MANIFEST_INVALID')
+        if manifest.get('constitution_hash')!=settings.get('constitution_hash') or manifest.get('engine_sha256')!=settings.get('engine_sha256'):raise RuntimeError('GITHUB_RECEIVER_CONTRACT_MISMATCH')
+        if not re.fullmatch('[0-9a-f]{40}',str(manifest.get('source_commit') or '')):raise RuntimeError('GITHUB_RECEIVER_CODE_REF_INVALID')
+        rows=manifest.get('candidates');files=manifest.get('files')
+        if not isinstance(rows,list) or len(rows)>32 or not isinstance(files,dict):raise RuntimeError('GITHUB_RECEIVER_CANDIDATES_INVALID')
+        if set(names)!={'MANIFEST.json',*files}:raise RuntimeError('GITHUB_RECEIVER_FILE_SET_INVALID')
+        pending=[];versions=set();paths=set()
+        for row in rows:
+            version=str(row.get('exact_strategy_version') or '');strategy=str(row.get('strategy_id') or '');tf=str(row.get('timeframe') or '')
+            if not re.fullmatch('[A-Za-z0-9_]{1,160}',version) or not re.fullmatch('[A-Z0-9_]{1,160}',strategy) or tf not in ('30M','1H','6H','12H','1D','1W'):raise RuntimeError('GITHUB_RECEIVER_ID_INVALID')
+            if version in versions:raise RuntimeError('GITHUB_RECEIVER_DUPLICATE_VERSION')
+            versions.add(version)
+            if not re.fullmatch('[0-9a-f]{64}',str(row.get('source_sha256') or '')):raise RuntimeError('GITHUB_RECEIVER_SOURCE_HASH_INVALID')
+            evidence=row.get('research_evidence') or {}
+            if evidence.get('eligible') is not True or evidence.get('pipeline_stage')!='LOCAL_SHADOW_PENDING' or (evidence.get('full_validation_gate') or {}).get('pass') is not True or (evidence.get('sealed_final_blind_gate') or {}).get('pass') is not True or (evidence.get('sealed_final_blind_gate') or {}).get('next_stage')!='LOCAL_SHADOW_PENDING':raise RuntimeError('GITHUB_RECEIVER_FINAL_GATES_REQUIRED')
+            for field in ('strategy_id','timeframe','exact_strategy_version','source_sha256'):
+                if evidence.get(field)!=row.get(field):raise RuntimeError('GITHUB_RECEIVER_EVIDENCE_BINDING')
+            if row.get('server_shadow_required') is not True or row.get('approved_for_server_release') is not False:raise RuntimeError('GITHUB_RECEIVER_SHADOW_REQUIRED')
+            name=str(row.get('artifact') or '')
+            if not re.fullmatch(r'artifacts/[0-9a-f]{64}\.py',name) or name not in files or name in paths:raise RuntimeError('GITHUB_RECEIVER_ARTIFACT_PATH')
+            paths.add(name);raw=blob(name,128*1024);digest=hashlib.sha256(raw).hexdigest()
+            if digest!=row.get('runtime_sha256') or digest!=files[name].get('sha256') or len(raw)!=files[name].get('bytes'):raise RuntimeError('GITHUB_RECEIVER_ARTIFACT_HASH')
+            compile(raw.decode('utf-8-sig'),name,'exec')
+            if b'PORTABLE_RUNTIME_ARTIFACT_V1' not in raw[:4096]:raise RuntimeError('GITHUB_RECEIVER_ARTIFACT_NOT_PORTABLE')
+            candidate_id=hashlib.sha256((strategy+'|'+tf+'|'+version).encode()).hexdigest()
+            target=inbox/candidate_id
+            if target.is_symlink():raise RuntimeError('GITHUB_RECEIVER_TARGET_SYMLINK')
+            if target.exists() and (not (target/'runtime.py').is_file() or hashlib.sha256((target/'runtime.py').read_bytes()).hexdigest()!=digest):raise RuntimeError('GITHUB_RECEIVER_IMMUTABLE_VERSION_CONFLICT')
+            pending.append((candidate_id,target,raw,row))
+        if paths!=set(files):raise RuntimeError('GITHUB_RECEIVER_UNBOUND_ARTIFACT')
+        inbox.mkdir(parents=True,exist_ok=True)
+        for candidate_id,target,raw,row in pending:
+            if not target.exists():
+                import tempfile
+                temporary=Path(tempfile.mkdtemp(prefix='.incoming-',dir=str(inbox)))
+                try:
+                    (temporary/'runtime.py').write_bytes(raw)
+                    (temporary/'EVIDENCE.json').write_text(json.dumps({'candidate':row,'source_commit':manifest['source_commit'],'received_commit':revision},ensure_ascii=False,sort_keys=True),encoding='utf-8')
+                    os.replace(temporary,target)
+                finally:
+                    if temporary.exists():shutil.rmtree(temporary)
+        keep={row[0] for row in pending}
+        stale=sorted((path for path in inbox.iterdir() if path.is_dir() and not path.is_symlink() and path.name not in keep),key=lambda path:path.stat().st_mtime,reverse=True)
+        for path in stale[max(0,64-len(keep)):]:shutil.rmtree(path)
+        git('reflog','expire','--expire=now','--all');git('gc','--prune=now')
+        result={'schema':'B_BOT_R4_GITHUB_RECEIVER_STATE_V1','status':'WAIT_SERVER_VALIDATION' if pending else 'WAIT_FINAL_RESEARCH','contract':[settings.get('constitution_hash'),settings.get('engine_sha256')],'received_commit':revision,'source_commit':manifest['source_commit'],'feedback_candidates':[{'timeframe':row['timeframe'],'required_symbols':row.get('required_symbols') or []} for row in rows],'candidate_ids':sorted(keep),'received_candidates':len(pending),'updated_at':int(time.time()),'automatic_registration_enabled':False,'orders_touched':False}
+        temporary=status_path.with_name(status_path.name+'.'+str(os.getpid())+'.tmp');temporary.write_text(json.dumps(result,sort_keys=True),encoding='utf-8');os.replace(temporary,status_path)
+        # 동일 head는 위에서 반환하여 반복 성공 로그를 만들지 않는다.
+        log=BASE/'logs/runner.log';log.parent.mkdir(parents=True,exist_ok=True)
+        with log.open('a',encoding='utf-8') as output:output.write('[주문][R4][GITHUB_RECEIVE] '+json.dumps(result,sort_keys=True)+'\n')
+        if settings.get('feedback_enabled') is True:result['feedback']=publish_github_feedback(rows,revision)
+        return result
+    finally:
+        receiver_lock.close()
+
+
+# ================= 서버 → GitHub: 확정봉과 검증용 운영 설정 =================
+def publish_github_feedback(candidates, received_commit):
+    """기존 수집기 결과만 전달한다. 거래 API/운영 DB/설정에는 쓰지 않는다."""
+    import hashlib,re,subprocess,time
+    import pandas as pd
+    state=BASE/'state';settings=json.loads((state/'r4_github_receiver.json').read_text(encoding='utf-8-sig'))
+    if settings.get('feedback_enabled') is not True:return {'status':'DISABLED'}
+    heartbeat_path=BASE/'strategy_lab/results/v3/collector_heartbeat.json'
+    heartbeat=json.loads(heartbeat_path.read_text(encoding='utf-8-sig'));stamp=time.time()
+    if heartbeat.get('schema')!='B_BOT_V3_COLLECTOR_HEARTBEAT_V1' or not 0<=stamp-float(heartbeat.get('updated_at_epoch') or 0)<=180:raise RuntimeError('FEEDBACK_COLLECTOR_NOT_LIVE')
+    config_raw=(BASE/'strategy_config.json').read_bytes();config=json.loads(config_raw.decode('utf-8-sig'))
+    if len(config_raw)>1024**2 or any(re.search(pattern,config_raw) for pattern in (rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',rb'(?:AKIA|ASIA)[A-Z0-9]{16}',rb'gh[pousr]_[A-Za-z0-9]{30,}',rb'github_pat_[A-Za-z0-9_]{20,}',rb'\d{6,12}:[A-Za-z0-9_-]{35,}')):raise RuntimeError('FEEDBACK_CONFIG_UNSAFE')
+    def credential_fields(value):
+        if isinstance(value,dict):
+            for key,item in value.items():
+                if re.sub('[^a-z]','',str(key).lower()) in {'apikey','apisecret','privatekey','password','accesstoken','telegramtoken','bottoken'} and item:raise RuntimeError('FEEDBACK_CONFIG_CREDENTIAL_FIELD')
+                credential_fields(item)
+        elif isinstance(value,list):
+            for item in value:credential_fields(item)
+    credential_fields(config)
+    symbols={str(x).upper() for x in config.get('core_symbols') or []};frames={'1H'}
+    for candidate in candidates:
+        frames.add(str(candidate.get('timeframe') or '').upper())
+        symbols.update(str(x).upper() for x in candidate.get('required_symbols') or [])
+    intervals={'30M':1800,'1H':3600,'6H':21600,'12H':43200,'1D':86400,'1W':604800}
+    if not symbols or len(symbols)>35 or any(not re.fullmatch('[A-Z0-9]{2,30}USDT',symbol) for symbol in symbols) or not frames<=set(intervals):raise RuntimeError('FEEDBACK_UNIVERSE_INVALID')
+    if not symbols<=set(heartbeat.get('active_symbols') or []):raise RuntimeError('FEEDBACK_REQUIRED_SYMBOL_NOT_COLLECTED')
+    cache_path=state/'r4_github_market_cache.json'
+    if cache_path.is_symlink():raise RuntimeError('FEEDBACK_CACHE_SYMLINK')
+    cache={}
+    if cache_path.exists():
+        try:cache=json.loads(cache_path.read_text())
+        except (ValueError,OSError):pass
+    slot=int(stamp//min(intervals[frame] for frame in frames));identity=[sorted(symbols),sorted(frames),slot]
+    if cache.get('identity')==identity:market=cache['market']
+    else:
+        bars={}
+        for symbol in sorted(symbols):
+            bars[symbol]={}
+            for frame in sorted(frames):
+                paths=[BASE/folder/symbol/(case+'.parquet') for folder in ('data/candles','backtest_data') for case in (frame.lower(),frame)]
+                path=next((path for path in paths if path.is_file() and not path.is_symlink()),None)
+                if path is None or path.stat().st_size>64*1024**2:raise RuntimeError('FEEDBACK_CANDLE_SOURCE_MISSING:'+symbol+':'+frame)
+                data=pd.read_parquet(path)
+                required={'open_time','open','high','low','close','volume','is_closed'}
+                if not required<=set(data.columns):raise RuntimeError('FEEDBACK_CANDLE_COLUMNS:'+symbol+':'+frame)
+                data=data[data['is_closed']==True].copy();data['open_time']=pd.to_datetime(data['open_time'],utc=True,errors='coerce');data=data.dropna(subset=['open_time']).sort_values('open_time').drop_duplicates('open_time').tail(160)
+                if len(data)<64:raise RuntimeError('FEEDBACK_INSUFFICIENT_CLOSED_BARS:'+symbol+':'+frame)
+                rows=[]
+                for record in data.to_dict('records'):
+                    opening=int(record['open_time'].timestamp()*1000);values=[float(record[field]) for field in ('open','high','low','close','volume')]
+                    if not all(__import__('math').isfinite(v) for v in values) or min(values[:4])<=0 or values[4]<0 or values[1]<max(values[0],values[2],values[3]) or values[2]>min(values[0],values[1],values[3]) or opening/1000+intervals[frame]>stamp+1:raise RuntimeError('FEEDBACK_INVALID_CLOSED_BAR')
+                    rows.append([opening,*values])
+                age=stamp-(rows[-1][0]/1000+intervals[frame])
+                if not 0<=age<=max(21600,2.2*intervals[frame]):raise RuntimeError('FEEDBACK_CLOSED_BAR_STALE:'+symbol+':'+frame)
+                bars[symbol][frame]=rows
+        market={'schema':'B_BOT_PUBLIC_CLOSED_BARS_V1','columns':['open_time_ms','open','high','low','close','volume'],'bars':bars}
+        raw=json.dumps({'identity':identity,'market':market},sort_keys=True,allow_nan=False).encode()
+        if len(raw)>8*1024**2:raise RuntimeError('FEEDBACK_MARKET_SIZE_LIMIT')
+        temporary=cache_path.with_suffix('.tmp');temporary.write_bytes(raw);os.replace(temporary,cache_path)
+    for symbol,items in market['bars'].items():
+        for frame,rows in items.items():
+            if not 0<=stamp-(rows[-1][0]/1000+intervals[frame])<=max(21600,2.2*intervals[frame]):raise RuntimeError('FEEDBACK_CACHED_BAR_STALE')
+    payloads={'HEARTBEAT.json':json.dumps(heartbeat,sort_keys=True).encode(),'MARKET.json':json.dumps(market,sort_keys=True,allow_nan=False).encode(),'CONFIG.json':config_raw}
+    manifest={'schema':'B_BOT_GITHUB_RUNTIME_FEEDBACK_V1','received_commit':received_commit,'created_at_epoch':stamp,'files':{name:{'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()} for name,raw in payloads.items()},'database_opened':False,'orders_touched':False,'symbols':sorted(symbols),'timeframes':sorted(frames)}
+    payloads['MANIFEST.json']=json.dumps(manifest,sort_keys=True).encode()
+    repo='git@github.com:hans1177/bbot-lab.git';ref='refs/heads/runtime-feedback';cache_dir=state/'github_runtime.git'
+    env=os.environ.copy();env.update(GIT_SSH_COMMAND='ssh -i /home/ec2-user/.ssh/bbot_lab_feedback -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/home/ec2-user/.ssh/bbot_lab_hosts',GIT_AUTHOR_NAME='B-Bot runtime',GIT_AUTHOR_EMAIL='runtime@localhost',GIT_COMMITTER_NAME='B-Bot runtime',GIT_COMMITTER_EMAIL='runtime@localhost')
+    def git(*args,data=None):
+        result=subprocess.run(['git','--git-dir='+str(cache_dir),*args],input=data,env=env,capture_output=True,timeout=45)
+        if result.returncode:raise RuntimeError('FEEDBACK_GIT_FAILED:'+args[0])
+        return result.stdout.decode().strip()
+    previous=git('ls-remote',repo,ref);expected=previous.split()[0] if previous else ''
+    entries=[]
+    for name,raw in payloads.items():
+        if len(raw)>8*1024**2:raise RuntimeError('FEEDBACK_BLOB_SIZE_LIMIT')
+        digest=git('hash-object','-w','--stdin',data=raw);entries.append('100644 blob '+digest+'\t'+name+'\n')
+    tree=git('mktree',data=''.join(entries).encode())
+    # 부모 없는 최신 스냅샷으로 원격 branch의 무제한 이력 누적을 피한다.
+    commit=git('commit-tree',tree,data=b'Latest read-only runtime market feedback\n')
+    git('push','--force-with-lease='+ref+':'+expected,repo,commit+':'+ref)
+    git('update-ref',ref,commit)
+    feedback_state=state/'r4_github_feedback_state.json'
+    if feedback_state.is_symlink():raise RuntimeError('FEEDBACK_STATUS_SYMLINK')
+    previous={}
+    if feedback_state.exists():
+        try:previous=json.loads(feedback_state.read_text())
+        except (ValueError,OSError):pass
+    scope=hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest()
+    result={'status':'PUBLISHED','commit':commit,'updated_at_epoch':stamp,'scope':scope,'database_opened':False,'orders_touched':False,'symbols':len(symbols),'timeframes':sorted(frames)}
+    temporary=feedback_state.with_suffix('.tmp');temporary.write_text(json.dumps(result,sort_keys=True));os.replace(temporary,feedback_state)
+    if previous.get('scope')!=scope:
+        log=BASE/'logs/runner.log';log.parent.mkdir(parents=True,exist_ok=True)
+        with log.open('a',encoding='utf-8') as output:output.write('[주문][R4][GITHUB_FEEDBACK] '+json.dumps(result,sort_keys=True)+'\n')
+    return {'status':'PUBLISHED','commit':commit,'symbols':len(symbols),'timeframes':sorted(frames),'orders_touched':False,'database_opened':False}
 
 
 if __name__=='__main__':
@@ -851,10 +960,11 @@ if __name__=='__main__':
             try:old=json.loads(path.read_text(encoding='utf-8-sig'))
             except Exception:pass
         reason=type(error).__name__+':'+str(error)[:160];stamp=int(time.time())
-        if old.get('last_error')!=reason or stamp-int(old.get('last_error_ts') or 0)>=300:
+        emit_error=old.get('last_error')!=reason or stamp-int(old.get('last_error_logged_at') or 0)>=300
+        if emit_error:
             log=BASE/'logs/runner.log';log.parent.mkdir(parents=True,exist_ok=True)
             with log.open('a',encoding='utf-8') as output:output.write('[주문][R4][GITHUB_RECEIVE_FAIL] '+reason+chr(10))
-        result={**old,'status':'ERROR','last_error':reason,'last_error_ts':stamp,'automatic_registration_enabled':False,'orders_touched':False}
+        result={**old,'status':'ERROR','last_error':reason,'last_error_ts':stamp,'last_error_logged_at':stamp if emit_error else old.get('last_error_logged_at',0),'automatic_registration_enabled':False,'orders_touched':False}
         if not path.is_symlink():
             path.parent.mkdir(parents=True,exist_ok=True);temporary=path.with_name(path.name+'.error.tmp');temporary.write_text(json.dumps(result),encoding='utf-8');os.replace(temporary,path)
         print(json.dumps(result,ensure_ascii=True));sys.exit(1)

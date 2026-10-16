@@ -76,3 +76,9 @@ R4 피드백의 `exit_fill_ids` 안에서 원장 생성식 `EXTERNAL_TRADE:종�
 The release context also follows the active strategy registry and verifies all seven legacy strategy hashes using the existing verifier baseline. The six existing release verifiers are retained at the repository root. Open-position verification accepts the same explicit workspace environment as the other verifiers; the autonomous guard permits only a read-only file collection loop owned by server preparation and still rejects base deployment execution. These changes do not enable registration.
 
 `--verify-context` runs all six existing release verifiers against an isolated, hash-bound server snapshot. The engineering workflow checks out the pinned source and original release-script receipts, constructs the workspace outside the checkout, and verifies all 37 runtime files remain unchanged. It never uses overlay inheritance, API credentials, server writes or live orders, and does not approve a candidate release. Linux uses the current Python interpreter; the existing Windows hidden-worker interpreter is preserved.
+
+### 서버 시세의 GitHub 검증 입력 전달
+
+`--install-server-receiver --enable-feedback --code-ref <검증된 커밋>`은 기존 수신 타이머에 비공개 `runtime-feedback` 브랜치 전송을 추가합니다. 별도 GitHub 쓰기 배포키를 서버에 만들며 거래소 키는 전송하지 않습니다. 배포키 자체는 저장소 쓰기 권한이고, 프로그램의 전송 대상은 이 고정 브랜치로 제한합니다. 실제 수집기 heartbeat, 최근 확정봉, 자격증명 검사를 통과한 전략 설정만 해시와 함께 전달합니다. 운영 DB와 주문 API는 사용하지 않습니다. 최신 스냅샷만 유지하고 같은 봉의 시세 객체는 재사용합니다.
+
+GitHub 연구는 `--prepare-context`로 기존 서버 소스와 여섯 검증기를 격리 작업공간에 구성하고, `--pull-runtime-feedback`으로 서버 원본 시각을 보존한 입력을 읽습니다. heartbeat가 오래됐거나 후보 수신 커밋이 다르면 가져오지 않습니다. 수신기 설치는 R4 재시작·운영 설정 변경·자동등록 활성화를 수행하지 않습니다. 최종 후보의 섀도 검증과 실거래 적용 연결은 별도 완료 확인이 필요합니다.

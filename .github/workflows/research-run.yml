@@ -104,6 +104,20 @@ jobs:
           receipt['research_scope']=config['research_candidate_fill_timeframes']
           (root/'INPUT_RECEIPT.json').write_text(json.dumps(receipt))
           print('INPUT_HASHES_AND_RESEARCH_CONSTITUTION_OK')
+      - name: Checkout pinned server validation sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 57a210581fd0eda9f67dc0f20b54b9dc09030dc6
+          path: release-context
+          persist-credentials: false
+      - name: Checkout canonical release scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 985c7dd5bc093e415208dddd707657be573ed602
+          path: release-checks
+          persist-credentials: false
+      - name: Prepare isolated runtime validation context
+        run: python "$BBOT_LOCAL_ROOT/strategy_lab/v3_auto_runtime_release.py" --prepare-context
       - name: Download checkpoint
         env:
           GH_TOKEN: ${{ github.token }}
@@ -159,6 +173,11 @@ jobs:
               print('CHECKPOINT_RESTORED',receipt['source_run_id'])
           else:
               print('FRESH_RESEARCH_NO_LOCAL_QUEUE_IMPORTED')
+      - name: Read fresh server market feedback
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNNER_DRY_RUN: '1'
+        run: python "$BBOT_LOCAL_ROOT/strategy_lab/v3_auto_runtime_release.py" --pull-runtime-feedback
       - name: Existing controller preparation check
         run: |
           python "$BBOT_LOCAL_ROOT/strategy_lab/research_controller.py" --mode managed-dry-run --skip-server-health > "$RUNNER_TEMP/research-preflight.json"

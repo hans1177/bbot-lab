@@ -1242,7 +1242,76 @@ def verify_local(logic_verify_mode="RELEASE_CANDIDATE"):
             )
 
 
-def pull(label, research_only=False):
+def pull(label, research_only=False, runtime_feedback=False):
+    if runtime_feedback:
+        import base64,re,tempfile,urllib.request,urllib.error
+        import pandas as pd
+        if os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('GITHUB_REPOSITORY')!='hans1177/bbot-lab' or ROOT.resolve()==Path('/home/ec2-user/bot'):raise RuntimeError('GITHUB_ISOLATED_FEEDBACK_ONLY')
+        if REQUEST.exists():return {'status':'WAIT_EXISTING_RUNTIME_REQUEST'}
+        token=os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')
+        if not token:raise RuntimeError('GITHUB_FEEDBACK_READ_TOKEN_REQUIRED')
+        def api(path):
+            request=urllib.request.Request('https://api.github.com/repos/hans1177/bbot-lab'+path,headers={'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json'})
+            with urllib.request.urlopen(request,timeout=30) as response:return json.load(response)
+        if api('').get('private') is not True:raise RuntimeError('PRIVATE_FEEDBACK_REPOSITORY_REQUIRED')
+        try:head=api('/git/ref/heads/runtime-feedback')['object']['sha']
+        except urllib.error.HTTPError as error:
+            if error.code==404:return {'status':'WAIT_SERVER_FEEDBACK'}
+            raise
+        if not re.fullmatch('[0-9a-f]{40}',head):raise RuntimeError('FEEDBACK_REF_INVALID')
+        tree=api('/git/trees/'+head+'?recursive=1')
+        names={row['path']:row for row in tree.get('tree') or []}
+        if tree.get('truncated') or set(names)!={'CONFIG.json','MARKET.json','HEARTBEAT.json','MANIFEST.json'} or any(row.get('type')!='blob' or row.get('mode')!='100644' for row in names.values()):raise RuntimeError('FEEDBACK_TREE_INVALID')
+        def blob(name,limit):
+            row=names[name]
+            if not 0<=int(row.get('size',-1))<=limit:raise RuntimeError('FEEDBACK_BLOB_LIMIT')
+            value=api('/git/blobs/'+row['sha']);raw=base64.b64decode(value['content'],validate=False)
+            if value.get('encoding')!='base64' or len(raw)!=row['size']:raise RuntimeError('FEEDBACK_BLOB_INVALID')
+            return raw
+        manifest=json.loads(blob('MANIFEST.json',64*1024));files=manifest.get('files') or {}
+        if manifest.get('schema')!='B_BOT_GITHUB_RUNTIME_FEEDBACK_V1' or set(files)!={'CONFIG.json','MARKET.json','HEARTBEAT.json'}:raise RuntimeError('FEEDBACK_SCHEMA_INVALID')
+        if not 0<=time.time()-float(manifest.get('created_at_epoch') or 0)<=180:return {'status':'WAIT_FRESH_SERVER_FEEDBACK'}
+        current=api('/git/ref/heads/runtime-candidates')['object']['sha']
+        if manifest.get('received_commit')!=current:return {'status':'WAIT_SERVER_CANDIDATE_RECEIPT'}
+        raw_files={name:blob(name,8*1024**2 if name=='MARKET.json' else 1024**2) for name in files}
+        for name,raw in raw_files.items():
+            if len(raw)!=files[name].get('bytes') or hashlib.sha256(raw).hexdigest()!=files[name].get('sha256'):raise RuntimeError('FEEDBACK_HASH_MISMATCH:'+name)
+        config=json.loads(raw_files['CONFIG.json']);heartbeat=json.loads(raw_files['HEARTBEAT.json']);market=json.loads(raw_files['MARKET.json'])
+        def credentials(value):
+            if isinstance(value,dict):
+                for key,item in value.items():
+                    if re.sub('[^a-z]','',str(key).lower()) in {'apikey','apisecret','privatekey','password','accesstoken','telegramtoken','bottoken'} and item:raise RuntimeError('FEEDBACK_CREDENTIAL_FIELD')
+                    credentials(item)
+            elif isinstance(value,list):
+                for item in value:credentials(item)
+        credentials(config)
+        if heartbeat.get('schema')!='B_BOT_V3_COLLECTOR_HEARTBEAT_V1' or not 0<=time.time()-float(heartbeat.get('updated_at_epoch') or 0)<=180:return {'status':'WAIT_SERVER_COLLECTOR'}
+        seconds={'30M':1800,'1H':3600,'6H':21600,'12H':43200,'1D':86400,'1W':604800};bars=market.get('bars') or {}
+        if market.get('schema')!='B_BOT_PUBLIC_CLOSED_BARS_V1' or market.get('columns')!=['open_time_ms','open','high','low','close','volume'] or not 1<=len(bars)<=35:raise RuntimeError('FEEDBACK_MARKET_INVALID')
+        prepared=[]
+        for symbol,frames in bars.items():
+            if not re.fullmatch('[A-Z0-9]{2,30}USDT',symbol) or symbol not in (heartbeat.get('active_symbols') or []) or not frames or not set(frames)<=set(seconds):raise RuntimeError('FEEDBACK_MARKET_SCOPE_INVALID')
+            for frame,rows in frames.items():
+                if not isinstance(rows,list) or not 64<=len(rows)<=160 or any(not isinstance(row,list) or len(row)!=6 for row in rows):raise RuntimeError('FEEDBACK_BAR_SHAPE_INVALID')
+                data=pd.DataFrame(rows,columns=['open_time_ms','open','high','low','close','volume']).apply(pd.to_numeric,errors='raise')
+                import numpy as np
+                if not np.isfinite(data.to_numpy()).all() or (data[['open','high','low','close']]<=0).any().any() or (data['volume']<0).any() or (data['high']<data[['open','low','close']].max(axis=1)).any() or (data['low']>data[['open','high','close']].min(axis=1)).any() or not data['open_time_ms'].is_monotonic_increasing or data['open_time_ms'].duplicated().any():raise RuntimeError('FEEDBACK_BAR_VALUES_INVALID')
+                age=time.time()-(float(data['open_time_ms'].iloc[-1])/1000+seconds[frame])
+                if not 0<=age<=max(21600,2.2*seconds[frame]):return {'status':'WAIT_FRESH_CLOSED_BARS'}
+                if (data['open_time_ms']/1000+seconds[frame]>time.time()+1).any():raise RuntimeError('FEEDBACK_OPEN_BAR_FORBIDDEN')
+                data['open_time']=pd.to_datetime(data.pop('open_time_ms'),unit='ms',utc=True);data['is_closed']=True;prepared.append((symbol,frame,data))
+        with tempfile.TemporaryDirectory(prefix='runtime-feedback-',dir=str(ROOT)) as folder:
+            stage=Path(folder)
+            for index,(symbol,frame,data) in enumerate(prepared):data.to_parquet(stage/(str(index)+'.parquet'),index=False)
+            for index,(symbol,frame,data) in enumerate(prepared):
+                target=ROOT/'data/candles'/symbol/(frame.lower()+'.parquet');target.parent.mkdir(parents=True,exist_ok=True);os.replace(stage/(str(index)+'.parquet'),target)
+            for name,target in [('CONFIG.json',ROOT/'strategy_config.json'),('HEARTBEAT.json',RESULTS/'collector_heartbeat.json')]:
+                target.parent.mkdir(parents=True,exist_ok=True);temporary=stage/name;temporary.write_bytes(raw_files[name]);os.replace(temporary,target)
+        import v3_collector_required_universe
+        v3_collector_required_universe.main()
+        result={'status':'SERVER_FEEDBACK_IMPORTED','received_commit':head,'config_sha256':files['CONFIG.json']['sha256'],'market_sha256':files['MARKET.json']['sha256'],'source_heartbeat_epoch':heartbeat['updated_at_epoch'],'symbols':sorted(bars),'timeframes':sorted({frame for items in bars.values() for frame in items}),'server_write':False,'orders_touched':False}
+        receipt=RESULTS/'runtime_feedback_receipt.json';temporary=receipt.with_suffix('.tmp');temporary.write_text(json.dumps(result,sort_keys=True));os.replace(temporary,receipt)
+        return result
     if research_only:
         # GitHub는 연구만 소유하고, 서버 검증·섀도·적용은 기존 작업자가 소유한다.
         import base64,io,re,zipfile
@@ -2972,9 +3041,38 @@ def connect_github(code_ref):
     return 0
 
 
-def prepare_server(release_context=False):
+def prepare_server(release_context=False, local_context=False):
     """서버 전용 읽기 키와 최신 소스 점검만 준비한다. 운영 파일·DB·서비스는 변경하지 않는다."""
     import base64,re
+    if local_context:
+        import shutil,re
+        if os.environ.get('GITHUB_ACTIONS')!='true' or ROOT.resolve()==Path('/home/ec2-user/bot') or REQUEST.exists() or HOLD.exists():raise RuntimeError('ISOLATED_CONTEXT_PREPARATION_REQUIRED')
+        repo=Path(os.environ['GITHUB_WORKSPACE']).resolve();context=repo/'release-context';checks=repo/'release-checks'
+        if ROOT.resolve()==repo:raise RuntimeError('SEPARATE_VALIDATION_WORKSPACE_REQUIRED')
+        manifest=json.loads((context/'CONTEXT.json').read_text(encoding='utf-8-sig'))
+        if manifest.get('schema')!='B_BOT_RELEASE_CONTEXT_V1' or manifest.get('missing') or manifest.get('blocked'):raise RuntimeError('RELEASE_CONTEXT_INCOMPLETE')
+        pending=[]
+        for name,digest in manifest['files'].items():
+            if name.startswith('local/'):
+                if name not in {'local/sync_base_to_server.ps1','local/ENABLE_SERVER_SYNC_AFTER_LOCAL_PASS.ps1','local/LOCAL_V3_TEST.ps1'}:raise RuntimeError('CONTEXT_LOCAL_PATH_INVALID')
+                path=context/name;target=ROOT/Path(name).name
+            else:
+                if not re.fullmatch(r'[A-Za-z0-9_/]+\.py|strategy_config\.json',name) or '..' in name or name.startswith('/'):raise RuntimeError('CONTEXT_RUNTIME_PATH_INVALID')
+                path=context/'runtime'/name;target=ROOT/name
+            if path.is_symlink() or not path.is_file() or path.stat().st_size>1024**2 or hashlib.sha256(path.read_bytes()).hexdigest()!=digest:raise RuntimeError('CONTEXT_SOURCE_HASH:'+name)
+            pending.append((path,target))
+        receipt=json.loads((checks/'CHECKS.json').read_text(encoding='utf-8-sig'))
+        for name in ('strategy_runtime_sync.ps1','sync_from_server.ps1'):
+            path=checks/name
+            if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest()!=receipt['files'][name]:raise RuntimeError('CANONICAL_SCRIPT_HASH:'+name)
+            pending.append((path,ROOT/name))
+        for name in ('verify_v3.py','verify_overfit_validation.py','verify_logic_validation.py','verify_r4_sync.py','verify_open_position_version_policy.py','verify_autonomous_runtime_release.py','ROADMAP_CONSTITUTION_V3.json'):
+            pending.append((repo/name,ROOT/name))
+        for path,target in pending:
+            target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(path,target)
+        shutil.copy2(context/'CONTEXT.json',ROOT/'RELEASE_CONTEXT.json')
+        print(json.dumps({'status':'ISOLATED_CONTEXT_PREPARED','server_write':False,'orders_touched':False}))
+        return 0
     if os.name!='nt':raise RuntimeError('RUN_FROM_EXISTING_WINDOWS_SSH_HOST')
     key=Path(r'C:\my\han.pem')
     if not key.is_file():raise RuntimeError('EXISTING_AWS_SSH_KEY_NOT_FOUND')
@@ -3142,7 +3240,7 @@ print(json.dumps({'service':service,'refs':refs,'files':files,'operating_files_c
     return 0
 
 
-def install_server_receiver(code_ref):
+def install_server_receiver(code_ref, enable_feedback=False):
     """기존 Runtime 모듈의 수신 명령만 설치한다. 거래 활성화와 검증기 이식은 별도 gate다."""
     import base64,re
     if os.name!='nt' or not re.fullmatch('[0-9a-f]{40}',str(code_ref or '')):raise RuntimeError('PINNED_WINDOWS_SETUP_REQUIRED')
@@ -3155,6 +3253,23 @@ def install_server_receiver(code_ref):
             raise RuntimeError('RECEIVER_SETUP_GITHUB_FAILED:'+proc.stderr[-800:])
         return json.loads(proc.stdout)
     if api('').get('private') is not True:raise RuntimeError('PRIVATE_REPOSITORY_REQUIRED')
+    if enable_feedback:
+        key_script=r'''import json,os,subprocess
+from pathlib import Path
+path=Path('/home/ec2-user/.ssh/bbot_lab_feedback')
+if path.is_symlink() or path.with_suffix('.pub').is_symlink():raise RuntimeError('FEEDBACK_KEY_SYMLINK')
+if not path.exists():subprocess.run(['ssh-keygen','-q','-t','ed25519','-N','','-C','bbot-feedback','-f',str(path)],check=True,capture_output=True,timeout=15)
+os.chmod(path,0o600)
+public=subprocess.run(['ssh-keygen','-y','-f',str(path)],capture_output=True,text=True,check=True,timeout=15).stdout
+print(json.dumps({'public_key':' '.join(public.split()[:2])}))
+'''
+        checked=subprocess.run(['ssh','-o','BatchMode=yes','-o','ConnectTimeout=15','-i',r'C:\my\han.pem','ec2-user@13.159.128.120','/home/ec2-user/bot/venv/bin/python -B -'],input=key_script,text=True,encoding='utf-8',capture_output=True,timeout=60)
+        if checked.returncode:raise RuntimeError('FEEDBACK_PUBLIC_KEY_SETUP_FAILED:'+checked.stderr[-500:])
+        public=json.loads(checked.stdout)['public_key']
+        if not re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/=]+',public):raise RuntimeError('FEEDBACK_PUBLIC_KEY_INVALID')
+        found=next((row for row in api('/keys?per_page=100') if ' '.join(str(row.get('key') or '').split()[:2])==public),None)
+        registered=found or api('/keys',{'title':'bbot-runtime-feedback','key':public,'read_only':False})
+        if registered.get('read_only') is not False:raise RuntimeError('FEEDBACK_WRITE_KEY_NOT_REGISTERED')
     file=api('/contents/runtime/strategy_runtime.py?ref='+code_ref)
     runtime=base64.b64decode(file['content']);compile(runtime.decode('utf-8-sig'),'strategy_runtime.py','exec')
     # 현재 PC의 기존 검증기/배포 스크립트만 확보한다. 설정·키·DB는 수집하지 않는다.
@@ -3173,7 +3288,7 @@ def install_server_receiver(code_ref):
     tree=api('/git/trees',{'tree':entries});commit=api('/git/commits',{'message':'Preserve existing release checks for Linux portability review','tree':tree['sha'],'parents':[parent] if parent else []})
     if parent:api('/git/refs/heads/release-checks',{'sha':commit['sha'],'force':False})
     else:api('/git/refs',{'ref':'refs/heads/release-checks','sha':commit['sha']})
-    payload={'runtime':base64.b64encode(runtime).decode(),'runtime_sha256':hashlib.sha256(runtime).hexdigest(),'baseline_sha256':'1cb77962db51e26fccc83cdcbb88b5f801fb0c2dd0d5b29aef3a7637bf486cfb','code_ref':code_ref}
+    payload={'runtime':base64.b64encode(runtime).decode(),'runtime_sha256':hashlib.sha256(runtime).hexdigest(),'baseline_sha256':'1cb77962db51e26fccc83cdcbb88b5f801fb0c2dd0d5b29aef3a7637bf486cfb','code_ref':code_ref,'enable_feedback':bool(enable_feedback),'previous_receiver_sha256':'b18cc4eec9d34bce339503aebb1de9eae854e7c6889310bea87c9a544d210baa'}
     remote='import base64,json\npayload=json.loads(base64.b64decode('+repr(base64.b64encode(json.dumps(payload).encode()).decode())+'))\n'+r'''
 import fcntl,hashlib,importlib.util,os,subprocess,tempfile,time
 from pathlib import Path
@@ -3186,12 +3301,12 @@ before_pid=service()
 if not before_pid or before_pid=='0':raise RuntimeError('R4_SERVICE_NOT_RUNNING')
 if target.is_symlink():raise RuntimeError('RUNTIME_SOURCE_SYMLINK')
 old=target.read_bytes();old_sha=hashlib.sha256(old).hexdigest();new=base64.b64decode(payload['runtime'])
-if old_sha not in {payload['baseline_sha256'],payload['runtime_sha256']}:raise RuntimeError('AWS_RUNTIME_SOURCE_CHANGED')
+if old_sha not in {payload['baseline_sha256'],payload['previous_receiver_sha256'],payload['runtime_sha256']}:raise RuntimeError('AWS_RUNTIME_SOURCE_CHANGED')
 if hashlib.sha256(new).hexdigest()!=payload['runtime_sha256']:raise RuntimeError('INSTALL_SOURCE_HASH')
 compile(new,'strategy_runtime.py','exec')
 settings=state/'r4_github_receiver.json';old_settings=settings.read_bytes() if settings.exists() else None
 if settings.is_symlink():raise RuntimeError('RECEIVER_SETTINGS_SYMLINK')
-config={'enabled':True,'repository':'hans1177/bbot-lab','branch':'runtime-candidates','constitution_hash':'fcf9a69d6100b8638cf031680eef1b5e234ae10edd66f808e2c08631edced76a','engine_sha256':'3c665f886a02757e3b35444b437312385d88790c47c6346e90c64dfc0a5a86ed','code_ref':payload['code_ref'],'automatic_registration_enabled':False}
+config={'enabled':True,'repository':'hans1177/bbot-lab','branch':'runtime-candidates','constitution_hash':'fcf9a69d6100b8638cf031680eef1b5e234ae10edd66f808e2c08631edced76a','engine_sha256':'3c665f886a02757e3b35444b437312385d88790c47c6346e90c64dfc0a5a86ed','code_ref':payload['code_ref'],'automatic_registration_enabled':False,'feedback_enabled':payload.get('enable_feedback') is True}
 unit="""[Unit]
 Description=B-Bot verified GitHub candidate receipt
 After=network-online.target
@@ -3207,6 +3322,8 @@ PrivateTmp=true
 ProtectSystem=strict
 ReadWritePaths=/home/ec2-user/bot/state /home/ec2-user/bot/logs
 ReadOnlyPaths=/home/ec2-user/.ssh
+StandardOutput=null
+StandardError=null
 """
 timer="""[Unit]
 Description=B-Bot GitHub receipt timer
@@ -3219,6 +3336,7 @@ Unit=bbot-github-receive.service
 WantedBy=timers.target
 """
 def sudo(*args):subprocess.run(['sudo','-n',*args],check=True,capture_output=True,timeout=30)
+timer_was_active=subprocess.run(['systemctl','is-active','--quiet','bbot-github-receive.timer'],capture_output=True,timeout=10).returncode==0
 with tempfile.TemporaryDirectory(prefix='github-receive-install-',dir=str(state)) as folder:
     temp=Path(folder);module=temp/'strategy_runtime.py';module.write_bytes(new)
     env=os.environ.copy();env['BOT_BASE_DIR']=str(root);env['PYTHONDONTWRITEBYTECODE']='1'
@@ -3226,8 +3344,15 @@ with tempfile.TemporaryDirectory(prefix='github-receive-install-',dir=str(state)
     subprocess.run([str(root/'venv/bin/python'),'-B','-c',check],env=env,check=True,capture_output=True,timeout=30)
     backup=state/'github_receiver_backup';backup.mkdir(exist_ok=True)
     (backup/('strategy_runtime.'+old_sha+'.py')).write_bytes(old)
-    settings.write_text(json.dumps(config,sort_keys=True),encoding='utf-8')
     try:
+        if timer_was_active:
+            sudo('systemctl','stop','bbot-github-receive.timer')
+            deadline=time.monotonic()+90
+            while subprocess.run(['systemctl','is-active','--quiet','bbot-github-receive.service'],capture_output=True,timeout=10).returncode==0:
+                if time.monotonic()>=deadline:
+                    raise RuntimeError('RECEIVER_STILL_BUSY')
+                time.sleep(2)
+        settings_tmp=settings.with_suffix('.install.tmp');settings_tmp.write_text(json.dumps(config,sort_keys=True),encoding='utf-8');os.replace(settings_tmp,settings)
         received=subprocess.run([str(root/'venv/bin/python'),'-B',str(module),'--receive-github'],env=env,capture_output=True,text=True,timeout=90)
         if received.returncode:raise RuntimeError('AWS_CANDIDATE_RECEIPT_TEST_FAILED:'+received.stdout[-500:])
         result=json.loads(received.stdout)
@@ -3245,9 +3370,10 @@ with tempfile.TemporaryDirectory(prefix='github-receive-install-',dir=str(state)
             rollback=target.with_name(target.name+'.github.rollback');rollback.write_bytes(old);os.replace(rollback,target)
         if old_settings is None:settings.unlink(missing_ok=True)
         else:settings.write_bytes(old_settings)
+        if timer_was_active:sudo('systemctl','start','bbot-github-receive.timer')
         raise
     for path in sorted(backup.glob('strategy_runtime.*.py'),key=lambda p:p.stat().st_mtime,reverse=True)[2:]:path.unlink()
-print(json.dumps({'receiver':'AWS_DIRECT_RECEIVER_ACTIVE','timer':active,'r4_pid':before_pid,'service_restart':False,'operating_config_changed':False,'database_opened':False,'automatic_registration_enabled':False,'receipt':result}))
+print(json.dumps({'receiver':'AWS_DIRECT_RECEIVER_ACTIVE','timer':active,'r4_pid':before_pid,'service_restart':False,'operating_config_changed':False,'database_opened':False,'automatic_registration_enabled':False,'feedback_enabled':config['feedback_enabled'],'receipt':result}))
 '''
     command=['ssh','-o','BatchMode=yes','-o','ConnectTimeout=15','-o','ServerAliveInterval=5','-o','ServerAliveCountMax=3','-i',r'C:\my\han.pem','ec2-user@13.159.128.120','/home/ec2-user/bot/venv/bin/python -B -']
     result=subprocess.run(command,input=remote,text=True,encoding='utf-8',capture_output=True,timeout=240)
@@ -3272,14 +3398,22 @@ def main():
     )
 
 
+    parser.add_argument("--pull-runtime-feedback",action="store_true")
+    parser.add_argument("--prepare-context",action="store_true")
     parser.add_argument("--verify-context",action="store_true")
     parser.add_argument("--prepare-server",action="store_true")
     parser.add_argument("--prepare-release-context",action="store_true")
     parser.add_argument("--install-server-receiver",action="store_true")
+    parser.add_argument("--enable-feedback",action="store_true")
     parser.add_argument("--connect-github",action="store_true")
     parser.add_argument("--code-ref")
     parser.add_argument("--github-check",action="store_true")
     args = parser.parse_args()
+    if args.pull_runtime_feedback:
+        print(json.dumps(pull("GITHUB_RUNTIME",runtime_feedback=True),ensure_ascii=True))
+        return 0
+    if args.prepare_context:
+        return prepare_server(local_context=True)
     if args.verify_context:
         if ROOT.resolve()==Path('/home/ec2-user/bot') or REQUEST.exists() or HOLD.exists():raise RuntimeError('ISOLATED_VALIDATION_CONTEXT_REQUIRED')
         receipt=json.loads((ROOT/'RELEASE_CONTEXT.json').read_text(encoding='utf-8-sig'))
@@ -3300,7 +3434,7 @@ def main():
         return 0
 
     if args.install_server_receiver:
-        return install_server_receiver(args.code_ref)
+        return install_server_receiver(args.code_ref,enable_feedback=args.enable_feedback)
 
     if args.prepare_release_context:
         return prepare_server(release_context=True)
