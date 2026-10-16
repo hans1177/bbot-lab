@@ -40,6 +40,18 @@ class CloudCheckpointTests(unittest.TestCase):
     def test_changed_inputs_rejected(self):
         self.save();(self.root/'INPUT_RECEIPT.json').write_text('{}')
         with self.assertRaisesRegex(RuntimeError,'CHECKPOINT_INPUTS_CHANGED'):self.run_step('Restore exact research state')
+    def test_30m_extension_preserves_other_research(self):
+        old={'start.zip':'fixed','research_scope':['1H','6H','12H','1D','1W']}
+        p=self.root/'INPUT_RECEIPT.json';p.write_text(json.dumps(old));self.save()
+        new=dict(old,research_scope=['30M','1H','6H','12H','1D','1W'],official_30m={'period':['2019-09','2026-09'],'manifest_sha256':'fixture'})
+        p.write_text(json.dumps(new));self.run_step('Restore exact research state')
+        self.assertEqual(json.loads((self.state/'trial_ledger.json').read_text())['entries'],[{'trial':1}])
+    def test_30m_extension_cannot_change_original_archives(self):
+        old={'start.zip':'fixed','research_scope':['1H','6H','12H','1D','1W']}
+        p=self.root/'INPUT_RECEIPT.json';p.write_text(json.dumps(old));self.save()
+        new=dict(old,**{'start.zip':'changed','research_scope':['30M','1H','6H','12H','1D','1W'],'official_30m':{'period':['2019-09','2026-09'],'manifest_sha256':'fixture'}})
+        p.write_text(json.dumps(new))
+        with self.assertRaisesRegex(RuntimeError,'CHECKPOINT_INPUTS_CHANGED'):self.run_step('Restore exact research state')
     def test_unlisted_archive_path_rejected(self):
         self.save();folder=self.base/'research-checkpoint-in';p=folder/'checkpoint.zip'
         with zipfile.ZipFile(p,'a') as z:z.writestr('../outside','bad')

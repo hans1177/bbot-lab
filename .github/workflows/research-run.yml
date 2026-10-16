@@ -104,6 +104,100 @@ jobs:
           receipt['research_scope']=config['research_candidate_fill_timeframes']
           (root/'INPUT_RECEIPT.json').write_text(json.dumps(receipt))
           print('INPUT_HASHES_AND_RESEARCH_CONSTITUTION_OK')
+      - name: Restore verified official 30M history cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ github.workspace }}/cloud-research-workspace/backtest_data
+          key: official-usdm-30m-201909-202609-v1-ace276261e76
+      - name: Prepare official long 30M history
+        shell: python
+        run: |
+          import concurrent.futures,datetime,hashlib,io,json,os,re,time,urllib.error,urllib.request,zipfile
+          from pathlib import Path
+          import numpy as np
+          import pandas as pd
+          root=Path(os.environ['BBOT_LOCAL_ROOT'])
+          out=root/'backtest_data';out.mkdir(exist_ok=True)
+          symbols=sorted(pd.read_parquet(root/'gate_lab_exact_long_cache.parquet',columns=['symbol'])['symbol'].unique().tolist())
+          if not 4<=len(symbols)<=60 or any(not re.fullmatch(r'[A-Z0-9]{3,30}',s) for s in symbols):raise RuntimeError('30M_UNIVERSE_INVALID')
+          months=[]
+          for year in range(2019,2027):
+              for month in range(1,13):
+                  if '2019-09'<=f'{year:04}-{month:02}'<='2026-09':months.append(f'{year:04}-{month:02}')
+          BASE='https://data.binance.vision/data/futures/um/monthly/klines'
+          COLUMNS=['open_time','open','high','low','close','volume']
+          def download(url,limit):
+              for attempt in range(3):
+                  try:
+                      with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':'bbot-research-data/1'}),timeout=40) as response:
+                          raw=response.read(limit+1)
+                          if len(raw)>limit:raise RuntimeError('30M_DOWNLOAD_TOO_LARGE')
+                          return raw
+                  except urllib.error.HTTPError as error:
+                      if error.code==404:return None
+                      if error.code not in (429,500,502,503,504) or attempt==2:raise
+                  except (TimeoutError,urllib.error.URLError):
+                      if attempt==2:raise
+                  time.sleep(1+attempt)
+          def parse_archive(raw,checksum,symbol,month):
+              filename=f'{symbol}-30m-{month}.zip'
+              parts=checksum.decode('ascii').strip().split()
+              if len(parts)!=2 or parts[1].lstrip('*')!=filename or not re.fullmatch('[a-fA-F0-9]{64}',parts[0]) or hashlib.sha256(raw).hexdigest()!=parts[0].lower():raise RuntimeError('30M_OFFICIAL_CHECKSUM_MISMATCH')
+              with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                  if archive.namelist()!=[filename[:-4]+'.csv'] or archive.infolist()[0].file_size>8*1024**2:raise RuntimeError('30M_ARCHIVE_INVALID')
+                  frame=pd.read_csv(archive.open(archive.namelist()[0]),header=None,dtype=str)
+              if len(frame) and frame.iloc[0,0]=='open_time':frame=frame.iloc[1:]
+              if frame.shape[1]!=12 or not len(frame):raise RuntimeError('30M_CSV_INVALID')
+              values=frame.iloc[:,:7].apply(pd.to_numeric,errors='raise').to_numpy(dtype=float)
+              if not np.isfinite(values).all():raise RuntimeError('30M_NONFINITE')
+              start=int(pd.Timestamp(month+'-01',tz='UTC').timestamp()*1000)
+              end=int((pd.Timestamp(month+'-01',tz='UTC')+pd.offsets.MonthBegin()).timestamp()*1000)
+              ts=values[:,0]
+              if not ((ts>=start)&(ts<end)&(ts%1800000==0)&(values[:,6]==ts+1799999)).all() or not (np.diff(ts)==1800000).all():raise RuntimeError('30M_TIME_GRID_INVALID')
+              o,h,l,c,v=(values[:,i] for i in range(1,6))
+              if not ((l>0)&(h>=l)&(h>=o)&(h>=c)&(l<=o)&(l<=c)&(v>=0)).all():raise RuntimeError('30M_OHLCV_INVALID')
+              result=pd.DataFrame(values[:,:6],columns=COLUMNS)
+              result['open_time']=result['open_time'].astype('int64')
+              return result,parts[0].lower()
+          def fetch_symbol(symbol):
+              frames=[];archives=[];missing=[]
+              for month in months:
+                  filename=f'{symbol}-30m-{month}.zip';url=f'{BASE}/{symbol}/30m/{filename}'
+                  raw=download(url,4*1024**2)
+                  if raw is None:missing.append(month);continue
+                  checksum=download(url+'.CHECKSUM',1024)
+                  if checksum is None:raise RuntimeError('30M_CHECKSUM_MISSING:'+symbol+':'+month)
+                  frame,digest=parse_archive(raw,checksum,symbol,month);frames.append(frame)
+                  archives.append({'month':month,'sha256':digest,'url':url})
+              frame=pd.concat(frames,ignore_index=True) if frames else pd.DataFrame(columns=COLUMNS)
+              if len(frame) and not frame['open_time'].is_monotonic_increasing:raise RuntimeError('30M_UNSORTED')
+              if frame['open_time'].duplicated().any():raise RuntimeError('30M_DUPLICATE')
+              target=out/symbol/'30m.parquet';target.parent.mkdir(exist_ok=True)
+              frame.to_parquet(target,index=False)
+              row={'rows':len(frame),'first_ms':int(frame.open_time.min()) if len(frame) else None,'last_ms':int(frame.open_time.max()) if len(frame) else None,'sha256':hashlib.sha256(target.read_bytes()).hexdigest(),'archives':archives,'missing_months':missing}
+              print('OFFICIAL_30M',symbol,'rows='+str(len(frame)),flush=True)
+              return symbol,row
+          manifest_path=out/'OFFICIAL_30M.json'
+          if not manifest_path.exists():
+              with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:rows=dict(pool.map(fetch_symbol,symbols))
+              manifest={'schema':'B_BOT_OFFICIAL_USDM_30M_V1','period':['2019-09','2026-09'],'symbols':dict(sorted(rows.items()))}
+              manifest_path.write_text(json.dumps(manifest,sort_keys=True,separators=(',',':')))
+          manifest=json.loads(manifest_path.read_text())
+          if manifest.get('schema')!='B_BOT_OFFICIAL_USDM_30M_V1' or manifest.get('period')!=['2019-09','2026-09'] or set(manifest.get('symbols',{}))!=set(symbols):raise RuntimeError('30M_CACHE_MANIFEST_INVALID')
+          for symbol,row in manifest['symbols'].items():
+              target=out/symbol/'30m.parquet'
+              if hashlib.sha256(target.read_bytes()).hexdigest()!=row['sha256']:raise RuntimeError('30M_CACHE_HASH_MISMATCH')
+          for symbol in ['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT']:
+              row=manifest['symbols'].get(symbol,{})
+              if row.get('rows',0)<50000 or row.get('first_ms',10**20)>=1609459200000 or row.get('last_ms',0)<1790811000000:raise RuntimeError('30M_CORE_LONG_HISTORY_REQUIRED:'+symbol)
+          config_path=root/'strategy_lab/lab_config.json';config=json.loads(config_path.read_text())
+          config['research_candidate_fill_timeframes']=['30M','1H','6H','12H','1D','1W']
+          config_path.write_text(json.dumps(config,indent=2))
+          receipt_path=root/'INPUT_RECEIPT.json';receipt=json.loads(receipt_path.read_text())
+          receipt['research_scope']=config['research_candidate_fill_timeframes']
+          receipt['official_30m']={'period':['2019-09','2026-09'],'manifest_sha256':hashlib.sha256(manifest_path.read_bytes()).hexdigest()}
+          receipt_path.write_text(json.dumps(receipt))
+          print('OFFICIAL_30M_VERIFIED; RESEARCH_SCOPE=30M,1H,6H,12H,1D,1W; ENGINE_UNCHANGED')
       - name: Checkout pinned server validation sources
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -160,7 +254,14 @@ jobs:
               if receipt['schema']!='B_BOT_RESEARCH_CHECKPOINT_V1' or hashlib.sha256(raw).hexdigest()!=receipt['archive_sha256']:raise RuntimeError('CHECKPOINT_HASH_MISMATCH')
               if receipt['constitution_sha256']!=hashlib.sha256((root/'ROADMAP_CONSTITUTION_V3.json').read_bytes()).hexdigest():raise RuntimeError('CHECKPOINT_CONSTITUTION_MISMATCH')
               if receipt['engine_sha256']!=hashlib.sha256((root/'strategy_lab/run_strategy.py').read_bytes()).hexdigest():raise RuntimeError('CHECKPOINT_ENGINE_MISMATCH')
-              if receipt['input_archives']!=json.loads((root/'INPUT_RECEIPT.json').read_text()):raise RuntimeError('CHECKPOINT_INPUTS_CHANGED')
+              old_inputs=receipt['input_archives'];new_inputs=json.loads((root/'INPUT_RECEIPT.json').read_text())
+              if old_inputs!=new_inputs:
+                  expected=dict(old_inputs)
+                  expected['research_scope']=['30M','1H','6H','12H','1D','1W']
+                  expected['official_30m']=new_inputs.get('official_30m')
+                  extension=(old_inputs.get('research_scope')==['1H','6H','12H','1D','1W'] and 'official_30m' not in old_inputs and isinstance(new_inputs.get('official_30m'),dict) and new_inputs['official_30m'].get('period')==['2019-09','2026-09'] and expected==new_inputs)
+                  if not extension:raise RuntimeError('CHECKPOINT_INPUTS_CHANGED')
+                  print('CHECKPOINT_30M_SCOPE_EXTENDED; EXISTING_RESEARCH_PRESERVED')
               with zipfile.ZipFile(folder/'checkpoint.zip') as archive:
                   if set(archive.namelist())!=set(receipt['files']):raise RuntimeError('CHECKPOINT_FILE_SET_MISMATCH')
                   for name,row in receipt['files'].items():
