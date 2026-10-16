@@ -1,0 +1,20 @@
+{
+  "schema": "B_BOT_AWS_READ_ONLY_SOURCE_SNAPSHOT_V1",
+  "created_at": "2026-10-16T05:01:35.519818+00:00",
+  "service": "active",
+  "files": {
+    "r4_runtime_service.py": "048b6861f70a8df679b8b04c4d5926ced2aa9703232e92510361bfd222f0e6e1",
+    "strategy_runtime.py": "1cb77962db51e26fccc83cdcbb88b5f801fb0c2dd0d5b29aef3a7637bf486cfb",
+    "strategy_leg_ledger.py": "e73cfa1e002dfbe0b25e0960be6d0d2439629b2a6a3c2c4716ec53164bdaa544",
+    "multi_strategy_runtime.py": "a163d2c1db78eaeb6ec089d5f27686b169842f8c1d985fb075a19cf8c521ad47",
+    "r4_exchange_adapter.py": "938accb17e4cd4681a34405979317daacad346dd52454669a95fa1414fcf5957",
+    "r4_user_stream.py": "ea77bd617f5ffb6f6756a14a64ca7e9b036ec9ab871fd221e0edadfd341a6806",
+    "assist/cycle.py": "ea7032680cd6f1dbbba765f4855271028c29b92c5cf55cef02775545a4b42726",
+    "assist/strategy_registry.py": "8c07621d09bfcb762db2a7a07ff25c90ffe8dbea89e43358070f2725856789fd"
+  },
+  "deploy_key_id": 166620745,
+  "deploy_key_read_only": true,
+  "private_key_exported": false,
+  "operating_files_changed": false,
+  "database_opened": false
+}
