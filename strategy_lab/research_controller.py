@@ -747,127 +747,180 @@ def managed_dry_run(include_inputs: bool = False, export_inputs=None) -> dict:
         total = sum(p.stat().st_size for p in paths)
         if total > 4 * 1024**3:
             raise RuntimeError('EXPORT_INPUTS_EXCEED_4_GIB')
-        patterns = (
-            rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',
-            rb'(?:AKIA|ASIA)[A-Z0-9]{16}',
-            rb'gh[pousr]_[A-Za-z0-9]{30,}',
-            rb'\d{9,12}:[A-Za-z0-9_-]{35}',
-        )
-        # 압축 전에 검사하고 압축 시 동일 바이트인지 해시로 다시 묶는다.
-        scanned_hashes = {}
-        feedback_path = LAB / 'results' / 'v3' / 'runtime_feedback.json'
-        for path in sorted(paths, key=lambda p: (p != feedback_path, str(p))):
-            if path.suffix.lower() not in {'.py', '.json', '.jsonl', '.csv'}:
-                continue
-            if path.is_symlink() or not path.resolve().is_relative_to(ROOT.resolve()):
-                raise RuntimeError('EXPORT_PATH_OUTSIDE_RESEARCH_ROOT')
-            if path.stat().st_size > 512 * 1024**2:
-                raise RuntimeError('EXPORT_SINGLE_FILE_EXCEEDS_512_MIB')
-            raw = path.read_bytes()
-            relative = path.relative_to(ROOT).as_posix()
-            scan_raw = raw
-            # 원장 생성식의 EXTERNAL_TRADE 이벤트와 해당 기록의 종목·LEG를 대조한다.
-            # 압축에 저장하는 원본 바이트와 연구 증거는 변경하지 않는다.
-            if relative == 'strategy_lab/results/v3/runtime_feedback.json':
-                feedback = json.loads(raw.decode('utf-8-sig'))
-                if isinstance(feedback, dict) and feedback.get('schema') == 'B_BOT_R4_RUNTIME_RESEARCH_FEEDBACK_V1':
-                    for record in feedback.get('records') or []:
-                        if not isinstance(record, dict) or not isinstance(record.get('exit_fill_ids'), list):
+        import shutil
+        # 압축 전에 짧은 일관성 구간으로 입력 사본을 확정한다. 긴 압축은 사본만 읽는다.
+        # 기존 연구 잠금은 유지하며 원본 변경 검사를 생략하지 않는다.
+        if shutil.disk_usage(destination.parent).free < 2 * total + 64 * 1024**2:
+            raise RuntimeError('EXPORT_SNAPSHOT_DISK_SPACE_REQUIRED')
+        with tempfile.TemporaryDirectory(prefix='.research-snapshot-', dir=str(destination.parent)) as snapshot_dir:
+            snapshot_started_at = now()
+            snapshot_paths = {}
+            source_fingerprints = {}
+            for path in sorted(paths):
+                if path.is_symlink() or not path.resolve().is_relative_to(ROOT.resolve()):
+                    raise RuntimeError('EXPORT_PATH_OUTSIDE_RESEARCH_ROOT')
+                before = path.stat()
+                if before.st_size > 512 * 1024**2:
+                    raise RuntimeError('EXPORT_SINGLE_FILE_EXCEEDS_512_MIB')
+                source_fingerprints[path] = (before.st_size, before.st_mtime_ns, before.st_ino)
+            for index, path in enumerate(sorted(paths)):
+                raw = path.read_bytes()
+                after = path.stat()
+                signature = (after.st_size, after.st_mtime_ns, after.st_ino)
+                if signature != source_fingerprints[path] or len(raw) != after.st_size:
+                    raise RuntimeError('EXPORT_INPUT_CHANGED_RETRY:' + path.relative_to(ROOT).as_posix())
+                frozen = Path(snapshot_dir) / str(index)
+                frozen.write_bytes(raw)
+                snapshot_paths[path] = frozen
+            for path, signature in source_fingerprints.items():
+                if path in candle_paths:
+                    continue
+                current = path.stat()
+                if signature != (current.st_size, current.st_mtime_ns, current.st_ino):
+                    raise RuntimeError('EXPORT_INPUT_CHANGED_RETRY:' + path.relative_to(ROOT).as_posix())
+            # 연구 상태와 해당 버전 소스의 연결도 확정된 사본끼리 재검증한다.
+            snapshot_pipeline = json.loads(snapshot_paths[ROOT / required[4]].read_bytes().decode('utf-8-sig'))
+            snapshot_ledger = json.loads(snapshot_paths[ROOT / required[5]].read_bytes().decode('utf-8-sig'))
+            snapshot_memory = json.loads(snapshot_paths[ROOT / required[6]].read_bytes().decode('utf-8-sig'))
+            if not (
+                isinstance(snapshot_pipeline, dict) and isinstance(snapshot_pipeline.get('entries'), list) and snapshot_pipeline['entries']
+                and isinstance(snapshot_ledger, dict) and snapshot_ledger.get('schema') == 'B_BOT_V3_TRIAL_LEDGER_V1' and isinstance(snapshot_ledger.get('entries'), list)
+                and isinstance(snapshot_memory, dict) and isinstance(snapshot_memory.get('records'), dict)
+            ):
+                raise RuntimeError('EXPORT_SNAPSHOT_CHECKPOINT_INVALID')
+            for entry in snapshot_pipeline['entries']:
+                if not isinstance(entry, dict) or entry.get('eligible') is not True or entry.get('pipeline_stage') in terminal:
+                    continue
+                relative = str(entry.get('canonical_source_file') or '')
+                canonical = (ROOT / relative.replace('\\', '/')).resolve()
+                expected = str(entry.get('source_sha256') or '').lower()
+                frozen = snapshot_paths.get(canonical)
+                if not relative or not expected or frozen is None or hashlib.sha256(frozen.read_bytes()).hexdigest() != expected:
+                    raise RuntimeError('EXPORT_SNAPSHOT_CANONICAL_SOURCE_MISMATCH')
+            snapshot_completed_at = now()
+            patterns = (
+                rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',
+                rb'(?:AKIA|ASIA)[A-Z0-9]{16}',
+                rb'gh[pousr]_[A-Za-z0-9]{30,}',
+                rb'\d{9,12}:[A-Za-z0-9_-]{35}',
+            )
+            # 압축 전에 검사하고 압축 시 동일 바이트인지 해시로 다시 묶는다.
+            scanned_hashes = {}
+            feedback_path = LAB / 'results' / 'v3' / 'runtime_feedback.json'
+            for path in sorted(paths, key=lambda p: (p != feedback_path, str(p))):
+                if path.suffix.lower() not in {'.py', '.json', '.jsonl', '.csv'}:
+                    continue
+                if path.is_symlink() or not path.resolve().is_relative_to(ROOT.resolve()):
+                    raise RuntimeError('EXPORT_PATH_OUTSIDE_RESEARCH_ROOT')
+                if path.stat().st_size > 512 * 1024**2:
+                    raise RuntimeError('EXPORT_SINGLE_FILE_EXCEEDS_512_MIB')
+                raw = snapshot_paths[path].read_bytes()
+                relative = path.relative_to(ROOT).as_posix()
+                scan_raw = raw
+                # 원장 생성식의 EXTERNAL_TRADE 이벤트와 해당 기록의 종목·LEG를 대조한다.
+                # 압축에 저장하는 원본 바이트와 연구 증거는 변경하지 않는다.
+                if relative == 'strategy_lab/results/v3/runtime_feedback.json':
+                    feedback = json.loads(raw.decode('utf-8-sig'))
+                    if isinstance(feedback, dict) and feedback.get('schema') == 'B_BOT_R4_RUNTIME_RESEARCH_FEEDBACK_V1':
+                        for record in feedback.get('records') or []:
+                            if not isinstance(record, dict) or not isinstance(record.get('exit_fill_ids'), list):
+                                continue
+                            for index, value in enumerate(record['exit_fill_ids']):
+                                event = re.fullmatch(r'EXTERNAL_TRADE:([A-Z0-9]{2,32}):[0-9]{1,20}:(LEG_[0-9a-f]{32})', value) if isinstance(value, str) else None
+                                if event and event.group(1) == record.get('symbol') and event.group(2) == record.get('leg_id'):
+                                    record['exit_fill_ids'][index] = 'VERIFIED_R4_FILL_EVENT_ID'
+                        scan_raw = json.dumps(feedback, ensure_ascii=False).encode('utf-8')
+                if path.suffix.lower() in {'.py', '.json', '.jsonl', '.csv'}:
+                    for pattern_index, pattern in enumerate(patterns):
+                        match = re.search(pattern, scan_raw)
+                        if match:
+                            # 파일 경로와 종류만 반환하고 탐지된 값은 노출하지 않는다.
+                            raise RuntimeError('EXPORT_CREDENTIAL_PATTERN_DETECTED:' + relative + ':RULE_' + str(pattern_index + 1))
+                scanned_hashes[path] = hashlib.sha256(raw).hexdigest()
+            fd, temporary = tempfile.mkstemp(prefix='.research-export-' + destination.stem + '-', suffix='.tmp', dir=str(destination.parent))
+            os.close(fd)
+            manifest = {'schema': 'B_BOT_RESEARCH_INPUT_HANDOFF_V1', 'created_at': now(),
+                        'snapshot_started_at': snapshot_started_at, 'snapshot_completed_at': snapshot_completed_at,
+                        'public_upload_allowed': False, 'automatic_promotion': False,
+                        'orders_touched': False, 'files': {}}
+            fingerprints = {}
+            split_stage = None
+            try:
+                with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
+                    for path in sorted(paths):
+                        resolved = path.resolve()
+                        if path.is_symlink() or not resolved.is_relative_to(ROOT.resolve()):
+                            raise RuntimeError('EXPORT_PATH_OUTSIDE_RESEARCH_ROOT')
+                        before = snapshot_paths[path].stat()
+                        if before.st_size > 512 * 1024**2:
+                            raise RuntimeError('EXPORT_SINGLE_FILE_EXCEEDS_512_MIB')
+                        raw = snapshot_paths[path].read_bytes()
+                        after = snapshot_paths[path].stat()
+                        signature = (before.st_size, before.st_mtime_ns, before.st_ino)
+                        if signature != (after.st_size, after.st_mtime_ns, after.st_ino) or len(raw) != before.st_size:
+                            raise RuntimeError('EXPORT_SNAPSHOT_CHANGED:' + path.relative_to(ROOT).as_posix())
+                        relative = path.relative_to(ROOT).as_posix()
+                        if path in scanned_hashes and hashlib.sha256(raw).hexdigest() != scanned_hashes[path]:
+                            raise RuntimeError('EXPORT_SNAPSHOT_CHANGED:' + path.relative_to(ROOT).as_posix())
+                        archive.writestr(relative, raw)
+                        manifest['files'][relative] = {'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+                        fingerprints[path] = signature
+                        # 시세는 수집기가 별도로 갱신한다. 각 파일의 읽기 전후 상태와
+                        # 압축에 담은 실제 바이트 해시를 보존한다.
+                    for path, signature in fingerprints.items():
+                        if path in candle_paths:
                             continue
-                        for index, value in enumerate(record['exit_fill_ids']):
-                            event = re.fullmatch(r'EXTERNAL_TRADE:([A-Z0-9]{2,32}):[0-9]{1,20}:(LEG_[0-9a-f]{32})', value) if isinstance(value, str) else None
-                            if event and event.group(1) == record.get('symbol') and event.group(2) == record.get('leg_id'):
-                                record['exit_fill_ids'][index] = 'VERIFIED_R4_FILL_EVENT_ID'
-                    scan_raw = json.dumps(feedback, ensure_ascii=False).encode('utf-8')
-            if path.suffix.lower() in {'.py', '.json', '.jsonl', '.csv'}:
-                for pattern_index, pattern in enumerate(patterns):
-                    match = re.search(pattern, scan_raw)
-                    if match:
-                        # 파일 경로와 종류만 반환하고 탐지된 값은 노출하지 않는다.
-                        raise RuntimeError('EXPORT_CREDENTIAL_PATTERN_DETECTED:' + relative + ':RULE_' + str(pattern_index + 1))
-            scanned_hashes[path] = hashlib.sha256(raw).hexdigest()
-        fd, temporary = tempfile.mkstemp(prefix='.research-export-' + destination.stem + '-', suffix='.tmp', dir=str(destination.parent))
-        os.close(fd)
-        manifest = {'schema': 'B_BOT_RESEARCH_INPUT_HANDOFF_V1', 'created_at': now(),
-                    'public_upload_allowed': False, 'automatic_promotion': False,
-                    'orders_touched': False, 'files': {}}
-        fingerprints = {}
-        split_stage = None
-        try:
-            with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
-                for path in sorted(paths):
-                    resolved = path.resolve()
-                    if path.is_symlink() or not resolved.is_relative_to(ROOT.resolve()):
-                        raise RuntimeError('EXPORT_PATH_OUTSIDE_RESEARCH_ROOT')
-                    before = path.stat()
-                    if before.st_size > 512 * 1024**2:
-                        raise RuntimeError('EXPORT_SINGLE_FILE_EXCEEDS_512_MIB')
-                    raw = path.read_bytes()
-                    after = path.stat()
-                    signature = (before.st_size, before.st_mtime_ns, before.st_ino)
-                    if signature != (after.st_size, after.st_mtime_ns, after.st_ino) or len(raw) != before.st_size:
-                        raise RuntimeError('EXPORT_INPUT_CHANGED_RETRY')
-                    relative = path.relative_to(ROOT).as_posix()
-                    if path in scanned_hashes and hashlib.sha256(raw).hexdigest() != scanned_hashes[path]:
-                        raise RuntimeError('EXPORT_INPUT_CHANGED_RETRY')
-                    archive.writestr(relative, raw)
-                    manifest['files'][relative] = {'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
-                    fingerprints[path] = signature
-                    # 시세는 수집기가 별도로 갱신한다. 각 파일의 읽기 전후 상태와
-                    # 압축에 담은 실제 바이트 해시를 보존한다.
-                for path, signature in fingerprints.items():
-                    if path in candle_paths:
-                        continue
-                    current = path.stat()
-                    if signature != (current.st_size, current.st_mtime_ns, current.st_ino):
-                        raise RuntimeError('EXPORT_INPUT_CHANGED_RETRY')
-                archive.writestr('HANDOFF.json', json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
-            size = Path(temporary).stat().st_size
-            # 전체 ZIP 바이트를 나누므로 연구 파일이나 기록을 생략하지 않는다.
-            part_limit = int(os.getenv('BBOT_EXPORT_PART_BYTES') or 200 * 1024**2)
-            if not 1024**2 <= part_limit <= 200 * 1024**2:
-                raise ValueError('EXPORT_PART_LIMIT_INVALID')
-            outputs = []
-            if size <= part_limit:
-                os.link(temporary, destination)
-                outputs = [str(destination)]
-                final_path = destination
-            else:
-                import shutil
-                split_stage = Path(tempfile.mkdtemp(prefix='.research-parts-', dir=str(destination.parent)))
-                transfer = {'schema': 'B_BOT_RESEARCH_TRANSFER_PARTS_V1',
-                            'archive_name': destination.name, 'archive_bytes': size,
-                            'public_upload_allowed': False, 'parts': []}
-                archive_hash = hashlib.sha256()
-                with Path(temporary).open('rb') as stream:
-                    index = 1
-                    while True:
-                        block = stream.read(part_limit)
-                        if not block:
-                            break
-                        name = destination.name + '.' + str(index).zfill(3)
-                        (split_stage / name).write_bytes(block)
-                        archive_hash.update(block)
-                        transfer['parts'].append({'name': name, 'bytes': len(block), 'sha256': hashlib.sha256(block).hexdigest()})
-                        index += 1
-                transfer['archive_sha256'] = archive_hash.hexdigest()
-                (split_stage / 'TRANSFER.json').write_text(json.dumps(transfer, indent=2, sort_keys=True), encoding='utf-8')
-                # 연구 폴더 밖의 새 디렉터리로만 게시한다. 기존 파일은 보존한다.
-                if split_destination.exists():
-                    raise FileExistsError('EXPORT_DESTINATION_ALREADY_EXISTS')
-                split_stage.rename(split_destination)
-                split_stage = None
-                final_path = split_destination
-                outputs = [str(split_destination / row['name']) for row in transfer['parts']]
-                outputs.append(str(split_destination / 'TRANSFER.json'))
-            result['export'] = {'path': str(final_path), 'bytes': size, 'files': len(manifest['files']),
-                                'created': True, 'outputs': outputs, 'public_upload_allowed': False,
-                                'source_files_modified': False, 'server_write': False}
-        finally:
-            Path(temporary).unlink(missing_ok=True)
-            if split_stage is not None:
-                import shutil
-                shutil.rmtree(split_stage)
+                        current = snapshot_paths[path].stat()
+                        if signature != (current.st_size, current.st_mtime_ns, current.st_ino):
+                            raise RuntimeError('EXPORT_SNAPSHOT_CHANGED:' + path.relative_to(ROOT).as_posix())
+                    archive.writestr('HANDOFF.json', json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
+                size = Path(temporary).stat().st_size
+                # 전체 ZIP 바이트를 나누므로 연구 파일이나 기록을 생략하지 않는다.
+                part_limit = int(os.getenv('BBOT_EXPORT_PART_BYTES') or 200 * 1024**2)
+                if not 1024**2 <= part_limit <= 200 * 1024**2:
+                    raise ValueError('EXPORT_PART_LIMIT_INVALID')
+                outputs = []
+                if size <= part_limit:
+                    os.link(temporary, destination)
+                    outputs = [str(destination)]
+                    final_path = destination
+                else:
+                    import shutil
+                    split_stage = Path(tempfile.mkdtemp(prefix='.research-parts-', dir=str(destination.parent)))
+                    transfer = {'schema': 'B_BOT_RESEARCH_TRANSFER_PARTS_V1',
+                                'archive_name': destination.name, 'archive_bytes': size,
+                                'public_upload_allowed': False, 'parts': []}
+                    archive_hash = hashlib.sha256()
+                    with Path(temporary).open('rb') as stream:
+                        index = 1
+                        while True:
+                            block = stream.read(part_limit)
+                            if not block:
+                                break
+                            name = destination.name + '.' + str(index).zfill(3)
+                            (split_stage / name).write_bytes(block)
+                            archive_hash.update(block)
+                            transfer['parts'].append({'name': name, 'bytes': len(block), 'sha256': hashlib.sha256(block).hexdigest()})
+                            index += 1
+                    transfer['archive_sha256'] = archive_hash.hexdigest()
+                    (split_stage / 'TRANSFER.json').write_text(json.dumps(transfer, indent=2, sort_keys=True), encoding='utf-8')
+                    # 연구 폴더 밖의 새 디렉터리로만 게시한다. 기존 파일은 보존한다.
+                    if split_destination.exists():
+                        raise FileExistsError('EXPORT_DESTINATION_ALREADY_EXISTS')
+                    split_stage.rename(split_destination)
+                    split_stage = None
+                    final_path = split_destination
+                    outputs = [str(split_destination / row['name']) for row in transfer['parts']]
+                    outputs.append(str(split_destination / 'TRANSFER.json'))
+                result['export'] = {'path': str(final_path), 'bytes': size, 'files': len(manifest['files']),
+                                    'created': True, 'outputs': outputs, 'public_upload_allowed': False,
+                                    'source_files_modified': False, 'server_write': False,
+                                    'snapshot_started_at': snapshot_started_at, 'snapshot_completed_at': snapshot_completed_at}
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+                if split_stage is not None:
+                    import shutil
+                    shutil.rmtree(split_stage)
 
     return result
 

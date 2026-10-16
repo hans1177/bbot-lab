@@ -220,3 +220,84 @@ class ExportInputTests(InputFixture, unittest.TestCase):
         result, destination = self.export()
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(destination.exists())
+
+    def instrumented_export(self, hook):
+        destination = Path(self.temp.name + '-parts.zip')
+        script = '''import os,runpy,sys,zipfile,shutil
+from pathlib import Path
+from unittest.mock import patch
+root=Path(os.environ['BBOT_LOCAL_ROOT'])
+controller=Path(sys.argv[1])
+sys.path.insert(0,str(controller.parent))
+sys.argv=[str(controller),'--mode','managed-dry-run','--export-inputs',sys.argv[2]]
+''' + hook + "\nrunpy.run_path(str(controller),run_name='__main__')\n"
+        env = dict(os.environ, BBOT_LOCAL_ROOT=str(self.root), PYTHONDONTWRITEBYTECODE='1')
+        result = subprocess.run([sys.executable, '-B', '-c', script, str(REPO/'strategy_lab/research_controller.py'), str(destination)], env=env, capture_output=True, text=True, timeout=20)
+        return result, destination
+
+    def test_original_update_during_compression_preserves_frozen_checkpoint(self):
+        import zipfile
+        self.fixture()
+        ledger = self.root/'strategy_lab/results/v3/trial_ledger.json'
+        original = ledger.read_bytes()
+        hook = '''real_write=zipfile.ZipFile.writestr
+changed=False
+def write(archive,*args,**kwargs):
+    global changed
+    if not changed:
+        changed=True
+        target=root/'strategy_lab/results/v3/trial_ledger.json'
+        target.write_text('{"schema":"B_BOT_V3_TRIAL_LEDGER_V1","entries":[{"new_cycle":true}]}')
+    return real_write(archive,*args,**kwargs)
+zipfile.ZipFile.writestr=write
+'''
+        result, destination = self.instrumented_export(hook)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(ledger.read_bytes(), original)
+        with zipfile.ZipFile(destination) as archive:
+            self.assertEqual(archive.read('strategy_lab/results/v3/trial_ledger.json'), original)
+            manifest = json.loads(archive.read('HANDOFF.json'))
+            self.assertIn('snapshot_completed_at', manifest)
+            for name, row in manifest['files'].items():
+                self.assertEqual(hashlib.sha256(archive.read(name)).hexdigest(), row['sha256'])
+
+    def test_original_update_during_snapshot_fails_with_path(self):
+        self.fixture()
+        hook = '''real_write=Path.write_bytes
+changed=False
+def write(path,data):
+    global changed
+    result=real_write(path,data)
+    if not changed and path.parent.name.startswith('.research-snapshot-'):
+        changed=True
+        target=root/'strategy_lab/results/v3/trial_ledger.json'
+        target.write_text('{"schema":"B_BOT_V3_TRIAL_LEDGER_V1","entries":[{"concurrent":true}]}')
+    return result
+Path.write_bytes=write
+'''
+        result, destination = self.instrumented_export(hook)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('EXPORT_INPUT_CHANGED_RETRY:strategy_lab/results/v3/trial_ledger.json', result.stderr)
+        self.assertFalse(destination.exists())
+
+    def test_snapshot_canonical_source_revalidated(self):
+        self.fixture()
+        hook = '''real_usage=shutil.disk_usage
+def usage(path):
+    target=root/'strategy_lab/deploy_ready/candidate.py'
+    target.write_text('# concurrent new version\\n')
+    return real_usage(path)
+shutil.disk_usage=usage
+'''
+        result, destination = self.instrumented_export(hook)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('EXPORT_SNAPSHOT_CANONICAL_SOURCE_MISMATCH', result.stderr)
+        self.assertFalse(destination.exists())
+
+    def test_snapshot_low_disk_fails_before_copy(self):
+        self.fixture()
+        hook = "shutil.disk_usage=lambda path: __import__('types').SimpleNamespace(free=0)\n"
+        result, destination = self.instrumented_export(hook)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('EXPORT_SNAPSHOT_DISK_SPACE_REQUIRED', result.stderr)
+        self.assertFalse(destination.exists())
