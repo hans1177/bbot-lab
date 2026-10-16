@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:
-      BBOT_LOCAL_ROOT: ${{ runner.temp }}/research-workspace
+      BBOT_LOCAL_ROOT: ${{ github.workspace }}/cloud-research-workspace
       BBOT_AUTO_RESEARCH_MANAGER_V1: '1'
       B_BOT_V3_SERVER_PUSH_HOLD: '1'
       PYTHONDONTWRITEBYTECODE: '1'

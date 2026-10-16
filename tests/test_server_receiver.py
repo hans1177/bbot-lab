@@ -63,7 +63,7 @@ class InstallerTests(unittest.TestCase):
     def test_research_workspace_is_outside_checked_out_runtime_source(self):
         import yaml
         workflow=yaml.safe_load((ROOT/'.github/workflows/research-run.yml').read_text())
-        self.assertEqual(workflow['jobs']['research']['env']['BBOT_LOCAL_ROOT'],'${{ runner.temp }}/research-workspace')
+        self.assertEqual(workflow['jobs']['research']['env']['BBOT_LOCAL_ROOT'],'${{ github.workspace }}/cloud-research-workspace')
 
     def test_embedded_remote_script_compiles_and_does_not_restart_r4(self):
         source=(ROOT/'strategy_lab/v3_auto_runtime_release.py').read_text();tree=ast.parse(source)
