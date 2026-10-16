@@ -13,7 +13,7 @@ on:
   schedule:
     - cron: '15 * * * *'
 permissions:
-  contents: read
+  contents: write
   actions: write
 concurrency:
   group: research-runtime-single-worker
@@ -104,37 +104,35 @@ jobs:
           receipt['research_scope']=config['research_candidate_fill_timeframes']
           (root/'INPUT_RECEIPT.json').write_text(json.dumps(receipt))
           print('INPUT_HASHES_AND_RESEARCH_CONSTITUTION_OK')
-      - name: Locate latest research checkpoint
-        id: locate
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?name=research-checkpoint&per_page=100" --slurp > "$RUNNER_TEMP/research-artifacts.json"
-          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/research-run.yml/runs?status=success&per_page=1" > "$RUNNER_TEMP/research-prior-runs.json"
-          python - <<'PY'
-          import json,os
-          from pathlib import Path
-          temp=Path(os.environ['RUNNER_TEMP'])
-          value=json.loads((temp/'research-artifacts.json').read_text())
-          def flatten(x):
-              if isinstance(x,list):return [row for item in x for row in flatten(item)]
-              if isinstance(x,dict) and 'artifacts' in x:return flatten(x['artifacts'])
-              return [x] if isinstance(x,dict) and x.get('name')=='research-checkpoint' and not x.get('expired') else []
-          rows=sorted(flatten(value),key=lambda row:row['created_at'],reverse=True)
-          if rows:
-              run_id=int(rows[0]['workflow_run']['id'])
-              with open(os.environ['GITHUB_OUTPUT'],'a') as output:output.write('run_id='+str(run_id)+'\n')
-          elif json.loads((temp/'research-prior-runs.json').read_text()).get('total_count',0):
-              raise RuntimeError('PREVIOUS_CHECKPOINT_MISSING_NO_SILENT_RESET')
-          else:
-              print('FIRST_RUN_FRESH_RESEARCH')
-          PY
       - name: Download checkpoint
-        if: steps.locate.outputs.run_id != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          CHECKPOINT_RUN: ${{ steps.locate.outputs.run_id }}
-        run: gh run download "$CHECKPOINT_RUN" --repo "$GITHUB_REPOSITORY" --name research-checkpoint --dir "$RUNNER_TEMP/research-checkpoint-in"
+        shell: python
+        run: |
+          import base64,hashlib,json,os,urllib.request,urllib.error
+          from pathlib import Path
+          api='https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']
+          def get(path):
+              req=urllib.request.Request(api+path,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+              with urllib.request.urlopen(req,timeout=60) as response:return json.load(response)
+          try:head=get('/git/ref/heads/research-state')['object']['sha']
+          except urllib.error.HTTPError as error:
+              if error.code!=404:raise
+              if get('/actions/workflows/research-run.yml/runs?status=success&per_page=1').get('total_count',0):raise RuntimeError('PREVIOUS_CHECKPOINT_MISSING_NO_SILENT_RESET')
+              print('FIRST_RUN_FRESH_RESEARCH')
+          else:
+              commit=get('/git/commits/'+head)
+              tree=get('/git/trees/'+commit['tree']['sha'])['tree']
+              entries={row['path']:row for row in tree}
+              if set(entries)!={'CHECKPOINT.json','checkpoint.zip'}:raise RuntimeError('STATE_TREE_INVALID')
+              folder=Path(os.environ['RUNNER_TEMP'])/'research-checkpoint-in';folder.mkdir()
+              for name,row in entries.items():
+                  if row['type']!='blob':raise RuntimeError('STATE_TYPE_INVALID')
+                  blob=get('/git/blobs/'+row['sha'])
+                  raw=base64.b64decode(blob['content'],validate=False)
+                  if len(raw)!=blob['size']:raise RuntimeError('STATE_BLOB_SIZE')
+                  (folder/name).write_bytes(raw)
+              print('PRIVATE_GIT_CHECKPOINT_DOWNLOADED',head)
       - name: Restore exact research state
         id: restore
         shell: python
@@ -213,29 +211,31 @@ jobs:
       - name: Upload private checkpoint
         id: checkpoint_upload
         if: always() && steps.checkpoint.outcome == 'success'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: research-checkpoint
-          path: ${{ runner.temp }}/research-checkpoint-out/
-          overwrite: true
-          compression-level: 0
-          retention-days: 14
-          if-no-files-found: error
-      - name: Retain latest three checkpoint snapshots
-        if: always() && steps.checkpoint_upload.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: python
         run: |
-          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?name=research-checkpoint&per_page=100" --slurp > "$RUNNER_TEMP/research-retention.json"
-          python - <<'PY'
-          import json,os,subprocess
+          import base64,json,os,urllib.request,urllib.error
           from pathlib import Path
-          def flatten(value):
-              if isinstance(value,list):return [row for item in value for row in flatten(item)]
-              if isinstance(value,dict) and 'artifacts' in value:return flatten(value['artifacts'])
-              return [value] if isinstance(value,dict) and value.get('name')=='research-checkpoint' else []
-          rows=sorted(flatten(json.loads((Path(os.environ['RUNNER_TEMP'])/'research-retention.json').read_text())),key=lambda row:row['created_at'],reverse=True)
-          for row in rows[3:]:
-              artifact_id=int(row['id'])
-              subprocess.run(['gh','api','-X','DELETE',f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/artifacts/{artifact_id}"],check=True)
-          PY
+          api='https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']
+          def request(path,data=None,method=None):
+              body=None if data is None else json.dumps(data).encode()
+              req=urllib.request.Request(api+path,data=body,method=method,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'})
+              with urllib.request.urlopen(req,timeout=90) as response:return json.load(response)
+          try:parent=request('/git/ref/heads/research-state')['object']['sha']
+          except urllib.error.HTTPError as error:
+              if error.code!=404:raise
+              parent=None
+          out=Path(os.environ['RUNNER_TEMP'])/'research-checkpoint-out'
+          elements=[]
+          for name in ('CHECKPOINT.json','checkpoint.zip'):
+              raw=(out/name).read_bytes()
+              if len(raw)>90*1024**2:raise RuntimeError('CHECKPOINT_GIT_BLOB_LIMIT')
+              blob=request('/git/blobs',{'content':base64.b64encode(raw).decode(),'encoding':'base64'})
+              elements.append({'path':name,'mode':'100644','type':'blob','sha':blob['sha']})
+          tree=request('/git/trees',{'tree':elements})
+          commit=request('/git/commits',{'message':'Research checkpoint run '+os.environ['GITHUB_RUN_ID']+' attempt '+os.environ['GITHUB_RUN_ATTEMPT'],'tree':tree['sha'],'parents':[parent] if parent else []})
+          if parent:request('/git/refs/heads/research-state',{'sha':commit['sha'],'force':False},'PATCH')
+          else:request('/git/refs',{'ref':'refs/heads/research-state','sha':commit['sha']})
+          if request('/git/ref/heads/research-state')['object']['sha']!=commit['sha']:raise RuntimeError('CHECKPOINT_REF_VERIFY')
+          print('PRIVATE_GIT_CHECKPOINT_SAVED_AND_VERIFIED',commit['sha'])
