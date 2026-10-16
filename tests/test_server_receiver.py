@@ -33,6 +33,16 @@ class ReceiverTests(unittest.TestCase):
         result=self.call();self.assertEqual(result['status'],'WAIT_SERVER_VALIDATION');self.assertFalse(result['automatic_registration_enabled'])
         staged=list((self.root/'state/github_candidates').glob('*/runtime.py'));self.assertEqual(len(staged),1);self.assertEqual(staged[0].read_bytes(),self.artifact)
         self.assertEqual(config.read_text(),'OPERATING_CONFIG_UNCHANGED');self.assertFalse((self.root/'state/history.db').exists())
+    def test_rewritten_remote_head_updates_only_candidate_tracking_ref(self):
+        self.call()
+        fetch=next(args for args in self.calls if args[2]=='fetch')
+        self.assertEqual(fetch[-1],'+refs/heads/runtime-candidates:refs/remotes/origin/runtime-candidates')
+        self.assertNotIn('push',[args[2] for args in self.calls])
+        self.assertFalse((self.root/'strategy_config.json').exists())
+        self.manifest['constitution_hash']='0'*64
+        self.revision='a'*40
+        with self.assertRaisesRegex(RuntimeError,'CONTRACT'):self.call()
+
     def test_same_head_idempotent_and_does_not_repeat_log(self):
         self.call();log=self.root/'logs/runner.log';before=log.read_bytes();self.assertTrue(self.call()['unchanged']);self.assertEqual(log.read_bytes(),before)
     def test_first_gate_only_never_staged(self):

@@ -778,7 +778,7 @@ def receive_github_candidates():
         if not cache.exists():
             state.mkdir(parents=True,exist_ok=True)
             subprocess.run(['git','init','--bare',str(cache)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=10)
-        git('fetch','--depth=1','--no-tags','git@github.com:hans1177/bbot-lab.git','refs/heads/runtime-candidates:refs/remotes/origin/runtime-candidates')
+        git('fetch','--depth=1','--no-tags','git@github.com:hans1177/bbot-lab.git','+refs/heads/runtime-candidates:refs/remotes/origin/runtime-candidates')
         revision=git('rev-parse','refs/remotes/origin/runtime-candidates').decode().strip()
         if not re.fullmatch('[0-9a-f]{40}',revision):raise RuntimeError('GITHUB_RECEIVER_REF_INVALID')
         if (not settings.get('feedback_enabled') or 'feedback_candidates' in previous) and previous.get('contract')==[settings.get('constitution_hash'),settings.get('engine_sha256')] and previous.get('received_commit')==revision and previous.get('status') in {'WAIT_FINAL_RESEARCH','WAIT_SERVER_VALIDATION'}:
