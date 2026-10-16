@@ -28,3 +28,39 @@ jobs:
         run: |
           python strategy_lab/research_controller.py --mode managed-dry-run --skip-server-health > /tmp/preflight.json
           python -c "import json; r=json.load(open('/tmp/preflight.json')); assert r['ok'] and r['mutated'] is False and r['orders_touched'] is False; print('CONTROLLER_PREFLIGHT_OK')"
+      - name: Checkout pinned server validation sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 57a210581fd0eda9f67dc0f20b54b9dc09030dc6
+          path: release-context
+          persist-credentials: false
+      - name: Checkout canonical release scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 985c7dd5bc093e415208dddd707657be573ed602
+          path: release-checks
+          persist-credentials: false
+      - name: Run all six canonical release verifiers in isolation
+        shell: python
+        run: |
+          import hashlib,json,os,shutil,subprocess,sys
+          from pathlib import Path
+          repo=Path(os.environ['GITHUB_WORKSPACE']);context=repo/'release-context';checks=repo/'release-checks'
+          root=Path(os.environ['RUNNER_TEMP'])/'release-validation'
+          manifest=json.loads((context/'CONTEXT.json').read_text())
+          for name,digest in manifest['files'].items():
+              path=context/name if name.startswith('local/') else context/'runtime'/name
+              if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=digest:raise RuntimeError('CONTEXT_SOURCE_HASH:'+name)
+          shutil.copytree(context/'runtime',root)
+          shutil.copytree(repo/'strategy_lab',root/'strategy_lab',ignore=shutil.ignore_patterns('results','__pycache__','*.pyc'))
+          for path in repo.glob('verify_*.py'):shutil.copy2(path,root/path.name)
+          for path in (context/'local').glob('*.ps1'):shutil.copy2(path,root/path.name)
+          receipt=json.loads((checks/'CHECKS.json').read_text())
+          for name in ('strategy_runtime_sync.ps1','sync_from_server.ps1'):
+              path=checks/name
+              if hashlib.sha256(path.read_bytes()).hexdigest()!=receipt['files'][name]:raise RuntimeError('CANONICAL_SCRIPT_HASH:'+name)
+              shutil.copy2(path,root/name)
+          shutil.copy2(repo/'ROADMAP_CONSTITUTION_V3.json',root/'ROADMAP_CONSTITUTION_V3.json')
+          shutil.copy2(context/'CONTEXT.json',root/'RELEASE_CONTEXT.json')
+          env=os.environ.copy();env.update(BBOT_LOCAL_ROOT=str(root),BOT_BASE_DIR=str(root),RUNNER_DRY_RUN='1')
+          subprocess.run([sys.executable,'-B',str(root/'strategy_lab/v3_auto_runtime_release.py'),'--verify-context'],cwd=root,env=env,check=True,timeout=600)

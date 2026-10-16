@@ -397,18 +397,8 @@ def run(cmd, timeout):
 
 def run_python(path, timeout=900):
 
-    return run(
-        [
-            str(
-                ROOT
-                / ".venv"
-                / "Scripts"
-                / "pythonw.exe"
-            ),
-            str(path),
-        ],
-        timeout,
-    )
+    interpreter = ROOT / ".venv" / "Scripts" / "pythonw.exe" if os.name == "nt" else Path(sys.executable)
+    return run([str(interpreter), str(path)], timeout)
 
 
 def run_ps(path, timeout=900):
@@ -3282,6 +3272,7 @@ def main():
     )
 
 
+    parser.add_argument("--verify-context",action="store_true")
     parser.add_argument("--prepare-server",action="store_true")
     parser.add_argument("--prepare-release-context",action="store_true")
     parser.add_argument("--install-server-receiver",action="store_true")
@@ -3289,6 +3280,25 @@ def main():
     parser.add_argument("--code-ref")
     parser.add_argument("--github-check",action="store_true")
     args = parser.parse_args()
+    if args.verify_context:
+        if ROOT.resolve()==Path('/home/ec2-user/bot') or REQUEST.exists() or HOLD.exists():raise RuntimeError('ISOLATED_VALIDATION_CONTEXT_REQUIRED')
+        receipt=json.loads((ROOT/'RELEASE_CONTEXT.json').read_text(encoding='utf-8-sig'))
+        if receipt.get('schema')!='B_BOT_RELEASE_CONTEXT_V1' or receipt.get('missing') or receipt.get('blocked'):raise RuntimeError('RELEASE_CONTEXT_INCOMPLETE')
+        runtime_files={name:digest for name,digest in receipt['files'].items() if not name.startswith('local/')}
+        if not {'runner.py','order.py','candidate.py','risk_engine.py','strategy_config.json'}<=set(runtime_files):raise RuntimeError('RELEASE_CONTEXT_CORE_MISSING')
+        def unchanged():
+            for name,digest in runtime_files.items():
+                path=(ROOT/name).resolve()
+                if not path.is_relative_to(ROOT.resolve()) or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=digest:raise RuntimeError('RELEASE_CONTEXT_SOURCE_CHANGED:'+name)
+        unchanged()
+        os.environ['BBOT_LOCAL_ROOT']=str(ROOT);os.environ['BOT_BASE_DIR']=str(ROOT);os.environ['RUNNER_DRY_RUN']='1'
+        import v3_research_knowledge
+        v3_research_knowledge.ensure()
+        verify_local(logic_verify_mode=None)
+        unchanged()
+        print(json.dumps({'status':'CANONICAL_RELEASE_CONTEXT_VERIFIED','verifiers':6,'runtime_files_unchanged':len(runtime_files),'candidate_release_approved':False,'server_write':False,'real_order':False}))
+        return 0
+
     if args.install_server_receiver:
         return install_server_receiver(args.code_ref)
 
