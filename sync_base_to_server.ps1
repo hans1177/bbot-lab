@@ -84,17 +84,17 @@ function Sha([string]$Path) {
 $GRADE_FILES = @('r4_performance_tiering.py', 'r4_runtime_service.py', 'strategy_leg_ledger.py', 'multi_strategy_runtime.py', 'r4_exchange_adapter.py')
 $GRADE_NEW = @{
     'r4_performance_tiering.py' = 'e89a4e03297074f497b929058034bab7e12739f8ea60e854c4a0d941a66b841a'
-    'r4_runtime_service.py' = '9a4a810add27b7939a246e00b298c95cd3d8772163a0fef240930fc75afd8ee5'
-    'strategy_leg_ledger.py' = 'f8a2b3f315599293a853de8990a62d98ce242f42a8ad83368f1da56fbd6e04d2'
+    'r4_runtime_service.py' = '0ada11781866e31d0150d9ed1137a4a58edcc896a4c4911ba0e7db9aa8b12afe'
+    'strategy_leg_ledger.py' = '24ff72716de8d7b422aa4834f232092c1ca985be49fae921f211816ab6f9e47d'
     'multi_strategy_runtime.py' = '8e0704c8be02527acd4f9671427fafd290b756a8270ce551e24dd735886654fe'
     'r4_exchange_adapter.py' = '77441158f20a5f34055bbc90733178112387f9a13c8bf4d3f7ed3f3bab6e279a'
 }
 $GRADE_OLD = @{
-    'r4_performance_tiering.py' = '82625d2cdaf5566ceccc09e16d143ff962cfafdcdbdea184369aa74d1a8953ac'
-    'r4_runtime_service.py' = '048b6861f70a8df679b8b04c4d5926ced2aa9703232e92510361bfd222f0e6e1'
-    'strategy_leg_ledger.py' = 'e73cfa1e002dfbe0b25e0960be6d0d2439629b2a6a3c2c4716ec53164bdaa544'
-    'multi_strategy_runtime.py' = 'a163d2c1db78eaeb6ec089d5f27686b169842f8c1d985fb075a19cf8c521ad47'
-    'r4_exchange_adapter.py' = '938accb17e4cd4681a34405979317daacad346dd52454669a95fa1414fcf5957'
+    'r4_performance_tiering.py' = 'e89a4e03297074f497b929058034bab7e12739f8ea60e854c4a0d941a66b841a'
+    'r4_runtime_service.py' = '9a4a810add27b7939a246e00b298c95cd3d8772163a0fef240930fc75afd8ee5'
+    'strategy_leg_ledger.py' = 'f8a2b3f315599293a853de8990a62d98ce242f42a8ad83368f1da56fbd6e04d2'
+    'multi_strategy_runtime.py' = '8e0704c8be02527acd4f9671427fafd290b756a8270ce551e24dd735886654fe'
+    'r4_exchange_adapter.py' = '77441158f20a5f34055bbc90733178112387f9a13c8bf4d3f7ed3f3bab6e279a'
 }
 if ($Leverage30Release) {
     $GRADE_FILES = @('r4_runtime_service.py', 'strategy_runtime.py')

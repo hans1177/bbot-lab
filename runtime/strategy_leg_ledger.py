@@ -1249,7 +1249,7 @@ class StrategyLegLedger:
         return {"changed":True,"old_tier":old_tier,"new_tier":tier,"event_key":event_key}
 
     def record_tier_evidence(self, instance_id, evidence_name, passed, detail=None, evidence_key=""):
-        """exact Strategy Instance 승격/강등 근거를 bounded DB에 멱등 저장한다."""
+        """같은 관측은 중복 제거하고, 실패 뒤 정상 복구는 별도 이력으로 보존한다."""
         evidence_name=str(evidence_name or "").upper().strip()
         if not evidence_name:
             raise ValueError("TIER_EVIDENCE_NAME_REQUIRED")
@@ -1259,8 +1259,24 @@ class StrategyLegLedger:
             if not instance:
                 raise KeyError(instance_id)
             tier=str(instance["tier"]).upper()
-            key=str(evidence_key or "").strip() or canonical_id("TEV_",instance_id,tier,evidence_name,int(bool(passed)),payload_hash(detail))
-            con.execute("INSERT OR IGNORE INTO r4_tier_evidence(event_key,instance_id,exact_version,tier,evidence_name,passed,detail_json,ts) VALUES(?,?,?,?,?,?,?,?)",(key,instance_id,instance["exact_version"],tier,evidence_name,int(bool(passed)),canonical_json(detail),now_ts()))
+            key=str(evidence_key or "").strip()
+            if not key:
+                latest=con.execute(
+                    "SELECT * FROM r4_tier_evidence WHERE instance_id=? AND exact_version=? AND tier=? AND evidence_name=? ORDER BY ts DESC,id DESC LIMIT 1",
+                    (instance_id,instance["exact_version"],tier,evidence_name),
+                ).fetchone()
+                if latest and bool(latest["passed"])==bool(passed) and latest["detail_json"]==canonical_json(detail):
+                    return dict(latest)
+                # 파일명: strategy_leg_ledger.py / 직전 관측 키를 결합해 정상→실패→정상 전환을 구분한다.
+                key=canonical_id("TEV_",instance_id,instance["exact_version"],tier,evidence_name,int(bool(passed)),payload_hash(detail),latest["event_key"] if latest else "")
+            existing=con.execute("SELECT * FROM r4_tier_evidence WHERE event_key=?",(key,)).fetchone()
+            if existing:
+                if (existing["instance_id"]!=instance_id or existing["exact_version"]!=instance["exact_version"]
+                    or existing["tier"]!=tier or existing["evidence_name"]!=evidence_name
+                    or bool(existing["passed"])!=bool(passed) or existing["detail_json"]!=canonical_json(detail)):
+                    raise RuntimeError("TIER_EVIDENCE_KEY_PAYLOAD_CONFLICT")
+                return dict(existing)
+            con.execute("INSERT INTO r4_tier_evidence(event_key,instance_id,exact_version,tier,evidence_name,passed,detail_json,ts) VALUES(?,?,?,?,?,?,?,?)",(key,instance_id,instance["exact_version"],tier,evidence_name,int(bool(passed)),canonical_json(detail),now_ts()))
             row=con.execute("SELECT * FROM r4_tier_evidence WHERE event_key=?",(key,)).fetchone()
         return dict(row) if row else {}
 

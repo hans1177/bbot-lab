@@ -177,6 +177,112 @@ class ExecutionEvidenceTests(unittest.TestCase):
         dummy=SimpleNamespace(order=SimpleNamespace(client=SimpleNamespace(query_order=lambda **k:None),safe_call=lambda f,**k:f(**k)))
         self.assertIsNone(extract('r4_exchange_adapter.py','query_by_client_order_id')(dummy,'client','BTCUSDT')['found'])
 
+    def test_boolean_evidence_restores_pass_after_failure(self):
+        ids=[]
+        for value in (True,False,True):
+            ids.append(self.ledger.record_tier_evidence(self.instance,'CHECK',value,{'source':'CURRENT_OBSERVATION'})['id'])
+        self.assertEqual(len(set(ids)),3)
+        self.assertTrue(self.ledger.latest_tier_evidence(self.instance,'CANARY')['CHECK']['passed'])
+    def test_unchanged_boolean_evidence_does_not_grow_database(self):
+        for _ in range(100):
+            self.ledger.record_tier_evidence(self.instance,'CHECK',True,{'source':'CURRENT_OBSERVATION'})
+        with closing(self.ledger.connect()) as con:
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM r4_tier_evidence').fetchone()[0],1)
+    def test_explicit_old_event_replay_does_not_replace_latest_observation(self):
+        self.ledger.record_tier_evidence(self.instance,'CHECK',True,{},'old-event')
+        self.ledger.record_tier_evidence(self.instance,'CHECK',False,{},'new-event')
+        self.ledger.record_tier_evidence(self.instance,'CHECK',True,{},'old-event')
+        self.assertFalse(self.ledger.latest_tier_evidence(self.instance,'CANARY')['CHECK']['passed'])
+    def test_conflicting_explicit_evidence_is_rejected(self):
+        self.ledger.record_tier_evidence(self.instance,'CHECK',True,{},'event')
+        with self.assertRaisesRegex(RuntimeError,'KEY_PAYLOAD_CONFLICT'):
+            self.ledger.record_tier_evidence(self.instance,'CHECK',False,{},'event')
+    def recovery_fixture(self):
+        import time
+        from multi_strategy_runtime import MultiStrategyRuntime
+        self.fill()
+        now=int(time.time());block=now-60
+        row=dict(strategy_instance_id=self.instance,exact_strategy_version='EV_FIXTURE',tier='CANARY',entry_blocked=True,rollback_requested_to_local=True,rollback_target='PREVIOUS_VALIDATED_VERSION',tier_reason='SAFETY_EVIDENCE_FAIL',tier_updated_at=block)
+        path=Path(self.tmp.name)/'strategy_config.json'
+        path.write_text(json.dumps({'r4_runtime':{'strategy_instances':{self.instance:row}},'preserved':'unchanged'}))
+        for name,detail in (
+            ('NO_CRITICAL_HARD_FAIL',{'source':'BASKET_RECONCILE_MISMATCH'}),
+            ('STRATEGY_LEG_LEDGER_RECONCILE_PASS',{'source':'BASKET_RECONCILE','baskets':[['BTCUSDT','LONG']]}),
+        ):
+            self.ledger.record_tier_evidence(self.instance,name,False,detail)
+        with self.ledger.transaction() as con:
+            con.execute('UPDATE r4_tier_evidence SET ts=?',(block-1,))
+        self.ledger.record_tier_evidence(self.instance,'NO_CRITICAL_HARD_FAIL',True,{'source':'R4_FULL_CYCLE_SAFETY_PASS'})
+        self.ledger.record_tier_evidence(self.instance,'STRATEGY_LEG_LEDGER_RECONCILE_PASS',True,{'source':'BASKET_RECONCILE'})
+        self.ledger.reconcile('BTCUSDT','LONG',10,'current-snapshot')
+        runtime=MultiStrategyRuntime.__new__(MultiStrategyRuntime);runtime.ledger=self.ledger;runtime.entry_admission_enabled=True
+        service=SimpleNamespace(runtime=runtime,_reconcile_cycle_pass=True,_reconcile_cycle_started_at=now,_critical_fail_instances_this_cycle=set())
+        node=next(n for n in ast.walk(ast.parse((ROOT/'r4_runtime_service.py').read_text())) if isinstance(n,ast.FunctionDef) and n.name=='_recover_transient_leg_management_safety_latch')
+        def write_config(cfg):
+            path.write_text(json.dumps(cfg))
+        ns=dict(json=json,time=time,R4_LIVE_TIERS={'CANARY','SMALL','NORMAL'},STRATEGY_CONFIG_FILE=path,_atomic_strategy_config=write_config,_log=lambda *a,**k:None)
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[node],type_ignores=[])),'r4_runtime_service.py','exec'),ns)
+        recover=ns['_recover_transient_leg_management_safety_latch']
+        controller={'required_positive_scale_evidence':['NO_CRITICAL_HARD_FAIL','STRATEGY_LEG_LEDGER_RECONCILE_PASS']}
+        return service,row,path,recover,controller
+    def test_resolved_basket_lock_recovers_without_tier_or_position_change(self):
+        service,row,path,recover,controller=self.recovery_fixture()
+        before=self.ledger.get_leg(self.intent['leg_id'])
+        self.assertTrue(recover(service,self.instance,row,controller))
+        cfg=json.loads(path.read_text());fresh=cfg['r4_runtime']['strategy_instances'][self.instance]
+        self.assertFalse(fresh['entry_blocked']);self.assertFalse(fresh['rollback_requested_to_local'])
+        self.assertEqual(fresh['tier'],'CANARY');self.assertEqual(cfg['preserved'],'unchanged')
+        self.assertEqual(self.ledger.get_leg(self.intent['leg_id']),before)
+    def test_unverified_current_cycle_cannot_clear_safety_lock(self):
+        service,row,path,recover,controller=self.recovery_fixture();service._reconcile_cycle_pass=False
+        self.assertFalse(recover(service,self.instance,row,controller))
+        self.assertTrue(json.loads(path.read_text())['r4_runtime']['strategy_instances'][self.instance]['entry_blocked'])
+    def test_current_cycle_management_failure_keeps_safety_lock(self):
+        service,row,path,recover,controller=self.recovery_fixture();service._critical_fail_instances_this_cycle.add(self.instance)
+        self.assertFalse(recover(service,self.instance,row,controller))
+    def test_unresolved_basket_keeps_safety_lock(self):
+        service,row,path,recover,controller=self.recovery_fixture()
+        self.ledger.reconcile('BTCUSDT','LONG',11,'mismatch')
+        self.assertFalse(recover(service,self.instance,row,controller))
+    def test_loss_streak_lock_is_never_cleared_by_reconcile_recovery(self):
+        service,row,path,recover,controller=self.recovery_fixture();row['tier_reason']='CANARY_LOSS_STREAK_LIMIT'
+        self.assertFalse(recover(service,self.instance,row,controller))
+    def test_unrelated_safety_failure_is_not_auto_recovered(self):
+        service,row,path,recover,controller=self.recovery_fixture()
+        self.ledger.record_tier_evidence(self.instance,'OTHER_SAFETY',False,{'source':'UNKNOWN'})
+        with self.ledger.transaction() as con:
+            con.execute("UPDATE r4_tier_evidence SET ts=? WHERE evidence_name='OTHER_SAFETY'",(row['tier_updated_at'],))
+        self.assertFalse(recover(service,self.instance,row,controller))
+    def test_newer_lock_cannot_be_cleared_from_older_observation(self):
+        service,row,path,recover,controller=self.recovery_fixture()
+        cfg=json.loads(path.read_text());cfg['r4_runtime']['strategy_instances'][self.instance]['tier_updated_at']+=1;path.write_text(json.dumps(cfg))
+        self.assertFalse(recover(service,self.instance,row,controller))
+    def test_reconcile_proof_older_than_block_is_not_sufficient(self):
+        service,row,path,recover,controller=self.recovery_fixture()
+        with self.ledger.transaction() as con:
+            con.execute("UPDATE r4_tier_evidence SET ts=? WHERE evidence_name='STRATEGY_LEG_LEDGER_RECONCILE_PASS'",(row['tier_updated_at']-1,))
+        self.assertFalse(recover(service,self.instance,row,controller))
+
+    def test_shared_basket_uses_total_ledger_quantity_for_safety_recovery(self):
+        service,row,path,recover,controller=self.recovery_fixture()
+        other=self.ledger.register_instance('OTHER','1H','EV_OTHER','PV_OTHER',tier='CANARY',trailing_policy_version='TP_OTHER')
+        intent=self.ledger.reserve_intent(other,'other-signal','BTCUSDT','LONG',4,{'leverage':10},100)
+        self.ledger.mark_submitted(intent['intent_id'],'88')
+        self.ledger.confirm_fill(intent['intent_id'],'TRADE:other:88',4,100,exchange_order_id='88')
+        self.ledger.reconcile('BTCUSDT','LONG',14,'shared-current')
+        self.assertTrue(recover(service,self.instance,row,controller))
+        self.assertEqual(self.ledger.get_leg(intent['leg_id'])['owned_qty_units'],4)
+    def test_stale_basket_snapshot_cannot_release_safety_lock(self):
+        service,row,path,recover,controller=self.recovery_fixture()
+        with self.ledger.transaction() as con:
+            con.execute('UPDATE r4_basket_snapshots SET updated_ts=0')
+        self.assertFalse(recover(service,self.instance,row,controller))
+    def test_wrong_failure_source_cannot_release_safety_lock(self):
+        service,row,path,recover,controller=self.recovery_fixture()
+        with self.ledger.transaction() as con:
+            con.execute("UPDATE r4_tier_evidence SET detail_json=? WHERE evidence_name='NO_CRITICAL_HARD_FAIL' AND passed=0",(json.dumps({'source':'UNKNOWN'}),))
+        self.assertFalse(recover(service,self.instance,row,controller))
+
     def test_ws_margin_asset_preserved(self):
         captured=[]
         dummy=SimpleNamespace(ledger=SimpleNamespace(get_intent_by_client_order_id=lambda _:dict(self.intent)),exchange=SimpleNamespace(qty_to_units=lambda s,q:int(q),price_to_ticks=lambda s,p:int(p)),process_fill_event=lambda *a:captured.append(a[1]))

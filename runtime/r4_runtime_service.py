@@ -649,7 +649,11 @@ class R4RuntimeService:
 
 
     def _recover_transient_leg_management_safety_latch(self, instance_id, row, controller):
-        # Fail-closed recovery for a stale transient LEG_MANAGEMENT RuntimeError latch only.
+        # 파일명: r4_runtime_service.py / 새 전체 대조로 해결이 증명된 자동 안전 차단만 복구한다.
+        if not getattr(self,"_reconcile_cycle_pass",False) or not self.runtime.entry_admission_enabled:
+            return False
+        if str(instance_id) in getattr(self,"_critical_fail_instances_this_cycle",set()):
+            return False
         if not isinstance(row, dict):
             return False
 
@@ -701,19 +705,24 @@ class R4RuntimeService:
             return False
 
         failed_names = {str(x["evidence_name"] or "").upper() for x in failed_rows}
-        if failed_names != {"NO_CRITICAL_HARD_FAIL"}:
+        leg_management=failed_names=={"NO_CRITICAL_HARD_FAIL"}
+        basket_reconcile=failed_names=={"NO_CRITICAL_HARD_FAIL","STRATEGY_LEG_LEDGER_RECONCILE_PASS"}
+        if not leg_management and not basket_reconcile:
             return False
-
+        recovery_source="TRANSIENT_LEG_MANAGEMENT_RUNTIMEERROR" if leg_management else "VERIFIED_BASKET_RECONCILE_RECOVERY"
         for failed_row in failed_rows:
             try:
-                detail = json.loads(failed_row["detail_json"] or "{}")
-            except Exception:
+                detail=json.loads(failed_row["detail_json"] or "{}")
+            except (TypeError,ValueError):
                 return False
-
-            if str(detail.get("source") or "").upper() != "LEG_MANAGEMENT":
-                return False
-
-            if "RUNTIMEERROR" not in str(detail.get("error") or "").upper():
+            source=str(detail.get("source") or "").upper()
+            if leg_management:
+                if source!="LEG_MANAGEMENT" or "RUNTIMEERROR" not in str(detail.get("error") or "").upper():
+                    return False
+            elif str(failed_row["evidence_name"]).upper()=="NO_CRITICAL_HARD_FAIL":
+                if source!="BASKET_RECONCILE_MISMATCH":
+                    return False
+            elif source!="BASKET_RECONCILE":
                 return False
 
         evidence = ledger.latest_tier_evidence(instance_id, tier) or {}
@@ -732,7 +741,7 @@ class R4RuntimeService:
         if not isinstance(reconcile, dict):
             return False
 
-        if int(reconcile.get("passed") or 0) != 1:
+        if int(reconcile.get("passed") or 0) != 1 or int(reconcile.get("ts") or 0)<=block_ts:
             return False
 
         decision = self.runtime.evaluate_tier(instance_id, controller)
@@ -761,7 +770,7 @@ class R4RuntimeService:
                 owned = int(basket["owned"] or 0)
 
                 snap = con.execute(
-                    "SELECT ledger_qty_units,exchange_qty_units,mismatch "
+                    "SELECT ledger_qty_units,exchange_qty_units,mismatch,updated_ts "
                     "FROM r4_basket_snapshots WHERE symbol=? AND position_side=?",
                     (symbol, side),
                 ).fetchone()
@@ -773,7 +782,13 @@ class R4RuntimeService:
                 exchange_qty = int(snap["exchange_qty_units"] or 0)
                 mismatch = int(snap["mismatch"] or 0)
 
-                if mismatch != 0 or ledger_qty != owned or exchange_qty != owned:
+                # 여러 전략이 같은 바스켓을 보유하면 전체 원장 수량과 비교한다.
+                total_owned=int(con.execute(
+                    "SELECT COALESCE(SUM(owned_qty_units),0) FROM r4_active_legs WHERE symbol=? AND position_side=? AND owned_qty_units>0",
+                    (symbol,side),
+                ).fetchone()[0] or 0)
+                if (mismatch!=0 or total_owned<owned or ledger_qty!=total_owned or exchange_qty!=total_owned
+                    or int(snap["updated_ts"] or 0)<int(getattr(self,"_reconcile_cycle_started_at",0))):
                     return False
         finally:
             con.close()
@@ -800,6 +815,8 @@ class R4RuntimeService:
         if str(fresh.get("tier_reason") or "") != "SAFETY_EVIDENCE_FAIL":
             return False
 
+        if int(fresh.get("tier_updated_at") or 0)!=block_ts:
+            return False
         current_target = str(fresh.get("rollback_target") or "")
         if current_target not in ("", "PREVIOUS_VALIDATED_VERSION"):
             return False
@@ -807,7 +824,7 @@ class R4RuntimeService:
         fresh["entry_blocked"] = False
         fresh["rollback_requested_to_local"] = False
         fresh.pop("rollback_target", None)
-        fresh["tier_reason"] = "SAFETY_EVIDENCE_RECOVERED_AUTO_TRANSIENT_LEG_MANAGEMENT"
+        fresh["tier_reason"] = "SAFETY_EVIDENCE_RECOVERED_"+recovery_source
         fresh["tier_updated_at"] = int(time.time())
 
         _atomic_strategy_config(cfg)
@@ -815,11 +832,11 @@ class R4RuntimeService:
         _log(
             "info",
             "STALE_SAFETY_RECOVER:" + str(instance_id),
-            "[R4][SAFETY_RECOVER] instance="
+            "[주문][R4][SAFETY_RECOVER] instance="
             + str(instance_id)
             + " tier="
             + tier
-            + " source=TRANSIENT_LEG_MANAGEMENT_RUNTIMEERROR",
+            + " source="+recovery_source,
             sec=60,
         )
 
@@ -1002,6 +1019,9 @@ class R4RuntimeService:
             if tier not in R4_LIVE_TIERS:
                 continue
             self._ingest_config_evidence(instance_id,row)
+            if row.get("entry_blocked") is True and row.get("rollback_requested_to_local") is True:
+                if self._recover_transient_leg_management_safety_latch(instance_id,row,controller):
+                    row=strategy_runtime.r4_strategy_instance(instance_id) or row
             if performance_enabled and (
                 row.get("entry_blocked") is True
                 or row.get("rollback_requested_to_local") is True
@@ -1013,11 +1033,8 @@ class R4RuntimeService:
                 })
                 continue
             if not performance_enabled and row.get("entry_blocked") is True and row.get("rollback_requested_to_local") is True:
-                if self._recover_transient_leg_management_safety_latch(instance_id,row,controller):
-                    row=strategy_runtime.r4_strategy_instance(instance_id) or row
-                else:
-                    results.append({"instance_id":instance_id,"action":"HOLD","reason":"LOCAL_VERSION_ROLLBACK_REQUIRED"})
-                    continue
+                results.append({"instance_id":instance_id,"action":"HOLD","reason":"LOCAL_VERSION_ROLLBACK_REQUIRED"})
+                continue
             decision=self.runtime.evaluate_tier(instance_id,controller)
             if not performance_enabled:
                 result=self._apply_tier_decision(instance_id,decision)
@@ -2905,6 +2922,8 @@ class R4RuntimeService:
         return limit
 
     def cycle(self):
+        self._reconcile_cycle_pass=False
+        self._reconcile_cycle_started_at=int(time.time())
         self._critical_fail_instances_this_cycle = set()  # R4_SERVER_CRITICAL_EVIDENCE_CYCLE_V2
         self.runtime.heartbeat()
 
@@ -3034,6 +3053,7 @@ class R4RuntimeService:
                 )
                 return 0
 
+        self._reconcile_cycle_pass=True
         managed_pairs = self._manage_active_legs()
         # 청산 결과를 반영한 등급·연패 차단을 재진입과 신규 진입보다 먼저 적용한다.
         self._tier_cycle()
