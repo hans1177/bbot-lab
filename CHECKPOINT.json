@@ -19,30 +19,38 @@
       "bytes": 456011,
       "sha256": "71874fdd08b8956351af4ab7468e37aac7b9251506fed0e028068da76c7759e6"
     },
+    "strategy_lab/results/20261016_041158_V3_BODY_IMPULSE_1H_BROAD_V1.json": {
+      "bytes": 457225,
+      "sha256": "172fc6f39ca6e3a5846e61b77f33af203799a2b75cc3086cf25b3be0911cb505"
+    },
     "strategy_lab/results/v3/generated_trials/adaptive_channel_1h_broad_v1.py": {
       "bytes": 1619,
       "sha256": "941c53c8401c292657e7b3a151050944e0c36cc5a26160e3af061bdb97c5ba17"
     },
+    "strategy_lab/results/v3/generated_trials/body_impulse_1h_broad_v1.py": {
+      "bytes": 1462,
+      "sha256": "78260ef7decd82a5382696e95a22cf53642e45b58912d95e26768cfc0924c662"
+    },
     "strategy_lab/results/v3/historical_314_pipeline_stage2.json": {
       "bytes": 567,
-      "sha256": "8f30e740c55d53c327511fab366623c10ed88078c5a258bc58e119a51626c45e"
+      "sha256": "9ec169c25c941fcfd5a36609186c1d0e51d5125b4f54aaa78a3f7e41271e41f6"
     },
     "strategy_lab/results/v3/research_knowledge.json": {
-      "bytes": 3478,
-      "sha256": "52beb18d01e1128ffc4a4604e5a5e00f0ead92c48782e6b8651189ff907679cf"
+      "bytes": 139042,
+      "sha256": "0f85519755b574dca172576df7dbd4b1174a2aa696e2a5b4863fef9dfa8d133f"
     },
     "strategy_lab/results/v3/research_knowledge_runtime.json": {
-      "bytes": 197,
-      "sha256": "05d5ba1f2f573a64287f8b91d4b4e802ca644d4d82ee034c6d23ff8cf61ca00f"
+      "bytes": 29477,
+      "sha256": "bec81a61b9920374d56e8356af8868275d328e28618f3c2e800fe9a86ae8ff35"
     },
     "strategy_lab/results/v3/roadmap_queue.json": {
-      "bytes": 37046,
-      "sha256": "32d344696ef171e43d23752664303f90e833469bded8118d0acc6a7d9839aa47"
+      "bytes": 37169,
+      "sha256": "c31ca7f21a7e01b777f7ced15625c79aa1aaa04846450de842c1f21bc2faec88"
     },
     "strategy_lab/results/v3/trial_ledger.json": {
-      "bytes": 765,
-      "sha256": "8a1bf966b6606ad794385f1105f266de832c3eb074702bba3309b3bb35d7be91"
+      "bytes": 1314,
+      "sha256": "3629fa1f13d2506fcda3a32eb553520368077770b3d0f2dca1718ac5e2d3e22d"
     }
   },
-  "archive_sha256": "94a0079fa8c15ef0b4d68f17ed16d077085dd6e6e6d197b46f6107346faa2300"
+  "archive_sha256": "a29af7ff675591a46b2ecde35d562552e86ce95147b42fef6dcc7ebf66d4b53d"
 }
