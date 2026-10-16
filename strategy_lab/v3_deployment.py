@@ -69,11 +69,9 @@ def source_for_pipeline(row):
     rel=str((row or {}).get("canonical_source_file") or "").replace("\\","/").lstrip("./")
     if not rel.lower().endswith(".py"):
         return None
-    prefix=next((x for x in LOCAL_SHADOW_PORTABLE_PREFIXES if rel.startswith(x)),None)
-    if prefix is None:
-        return None
-    tail=rel[len(prefix):]
-    if not tail or "/" in tail or "\\" in tail:
+    # 같은 소스의 이식 가능 여부는 기존 연구 파이프라인 책임 함수와 일치시킨다.
+    import v3_strategy_research as strategy_research
+    if not strategy_research._pipeline_source_portable(rel):
         return None
     p=(ROOT/rel).resolve()
     try:

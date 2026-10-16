@@ -157,6 +157,7 @@ FORBIDDEN_PATH_PARTS = (
 
 _lock_handle = None
 _log_dedupe = {}
+_github_pull_cache = {}
 
 
 def now():
@@ -1251,7 +1252,129 @@ def verify_local(logic_verify_mode="RELEASE_CANDIDATE"):
             )
 
 
-def pull(label):
+def pull(label, research_only=False):
+    if research_only:
+        # GitHub는 연구만 소유하고, 서버 검증·섀도·적용은 기존 작업자가 소유한다.
+        import base64,io,re,zipfile
+        config_path=ROOT/'strategy_lab/lab_config.json'
+        config=json.loads(config_path.read_text(encoding='utf-8-sig')) if config_path.exists() else {}
+        source=config.get('github_research') or {}
+        if source.get('enabled') is not True:
+            return {'status':'DISABLED','imported':0}
+        if source.get('repository')!='hans1177/bbot-lab':raise RuntimeError('GITHUB_RESEARCH_REPOSITORY_INVALID')
+        if time.monotonic() < _github_pull_cache.get('next_check',0):
+            if _github_pull_cache.get('error'):raise RuntimeError(_github_pull_cache['error'])
+            return _github_pull_cache.get('result',{'status':'WAIT_POLL','imported':0})
+        _github_pull_cache['next_check']=time.monotonic()+60
+        try:
+            def api(path):
+                rc,output=run(['gh','api','repos/hans1177/bbot-lab'+path],timeout=90)
+                if rc:raise RuntimeError('GITHUB_RESEARCH_READ_FAILED')
+                return json.loads(output)
+            if api('').get('private') is not True:raise RuntimeError('GITHUB_RESEARCH_PRIVATE_REQUIRED')
+            head=api('/git/ref/heads/research-state')['object']['sha']
+            if not re.fullmatch('[0-9a-f]{40}',head):raise RuntimeError('GITHUB_RESEARCH_HEAD_INVALID')
+            receipt_path=ROOT/'strategy_lab/results/v3/github_research_receipt.json'
+            previous=json.loads(receipt_path.read_text(encoding='utf-8-sig')) if receipt_path.exists() else {}
+            if previous.get('checkpoint_commit')==head:
+                result={'status':'UNCHANGED','imported':0,'checkpoint_commit':head}
+            else:
+                commit=api('/git/commits/'+head)
+                tree=api('/git/trees/'+commit['tree']['sha'])['tree']
+                entries={row['path']:row for row in tree}
+                if set(entries)!={'CHECKPOINT.json','checkpoint.zip'}:raise RuntimeError('GITHUB_RESEARCH_TREE_INVALID')
+                blobs={}
+                for name,item in entries.items():
+                    if item['type']!='blob' or item.get('size',0)>90*1024**2:raise RuntimeError('GITHUB_RESEARCH_BLOB_INVALID')
+                    value=api('/git/blobs/'+item['sha']);raw=base64.b64decode(value['content'])
+                    if len(raw)!=value['size']:raise RuntimeError('GITHUB_RESEARCH_BLOB_SIZE')
+                    blobs[name]=raw
+                receipt=json.loads(blobs['CHECKPOINT.json'])
+                if receipt.get('schema')!='B_BOT_RESEARCH_CHECKPOINT_V1' or hashlib.sha256(blobs['checkpoint.zip']).hexdigest()!=receipt.get('archive_sha256'):raise RuntimeError('GITHUB_RESEARCH_CHECKPOINT_HASH')
+                if receipt.get('constitution_sha256')!=sha256(ROOT/'ROADMAP_CONSTITUTION_V3.json'):raise RuntimeError('GITHUB_RESEARCH_CONSTITUTION_MISMATCH')
+                if receipt.get('engine_sha256')!=source.get('engine_sha256'):raise RuntimeError('GITHUB_RESEARCH_ENGINE_MISMATCH')
+                if not re.fullmatch('[0-9a-f]{40}',str(receipt.get('source_commit') or '')):raise RuntimeError('GITHUB_RESEARCH_SOURCE_COMMIT')
+                verified={}
+                with zipfile.ZipFile(io.BytesIO(blobs['checkpoint.zip'])) as archive:
+                    if len(archive.namelist())!=len(set(archive.namelist())) or set(archive.namelist())!=set(receipt.get('files') or {}):raise RuntimeError('GITHUB_RESEARCH_FILE_SET')
+                    if sum(item.file_size for item in archive.infolist())>512*1024**2:raise RuntimeError('GITHUB_RESEARCH_EXPANDED_LIMIT')
+                    for name,row in receipt['files'].items():
+                        target=(ROOT/name).resolve()
+                        if not name.startswith('strategy_lab/results/') or not target.is_relative_to(ROOT.resolve()) or '\\' in name or '..' in Path(name).parts:raise RuntimeError('GITHUB_RESEARCH_PATH_INVALID')
+                        raw=archive.read(name)
+                        if len(raw)!=row['bytes'] or hashlib.sha256(raw).hexdigest()!=row['sha256']:raise RuntimeError('GITHUB_RESEARCH_FILE_HASH')
+                        verified[name]=raw
+                pipeline_name='strategy_lab/results/v3/historical_314_pipeline_stage2.json'
+                pipeline=json.loads(verified.get(pipeline_name,b'{"entries":[]}'))
+                candidates=[];seen=set()
+                for row in pipeline.get('entries',[]):
+                    if not isinstance(row,dict) or row.get('pipeline_stage')!='LOCAL_SHADOW_PENDING' or row.get('eligible') is not True:continue
+                    if (row.get('full_validation_gate') or {}).get('pass') is not True or (row.get('sealed_final_blind_gate') or {}).get('pass') is not True or (row.get('sealed_final_blind_gate') or {}).get('next_stage')!='LOCAL_SHADOW_PENDING':raise RuntimeError('GITHUB_RESEARCH_FINAL_GATES_REQUIRED')
+                    version=str(row.get('exact_strategy_version') or '')
+                    if not version or version in seen:raise RuntimeError('GITHUB_RESEARCH_DUPLICATE_VERSION')
+                    seen.add(version)
+                    rel=str(row.get('canonical_source_file') or '')
+                    prefixes=('strategy_lab/results/v3/generated_trials/','strategy_lab/results/v3/generated_combinations/','strategy_lab/results/v3/generated_safe_grammar/','strategy_lab/results/v3/redeveloped_strategies/')
+                    prefix=next((p for p in prefixes if rel.startswith(p)),None)
+                    if not prefix or '/' in rel[len(prefix):] or not rel.endswith('.py') or rel not in verified:raise RuntimeError('GITHUB_RESEARCH_SOURCE_MISSING')
+                    raw=verified[rel]
+                    if hashlib.sha256(raw).hexdigest()!=row.get('source_sha256'):raise RuntimeError('GITHUB_RESEARCH_SOURCE_HASH')
+                    if '/generated_trials/' in rel and b'PORTABLE_GENERATED_SINGLE_V2' not in raw[:4096]:raise RuntimeError('GITHUB_RESEARCH_SOURCE_NOT_PORTABLE')
+                    compile(raw.decode('utf-8-sig'),rel,'exec')
+                    candidates.append(row)
+                import research_controller as controller
+                import v3_research_knowledge as knowledge
+                cloud_knowledge=json.loads(verified.get('strategy_lab/results/v3/research_knowledge.json',b'{"records":{}}'))
+                with controller.lock():
+                    if REQUEST.exists() or HOLD.exists():raise RuntimeError('GITHUB_RESEARCH_LOCAL_RELEASE_BUSY')
+                    local_path=ROOT/pipeline_name
+                    local=json.loads(local_path.read_text(encoding='utf-8-sig')) if local_path.exists() else {'schema':'B_BOT_UNIFIED_STRATEGY_PIPELINE_STAGE10_V1','entries':[]}
+                    existing={str(r.get('exact_strategy_version')):r for r in local.get('entries',[]) if isinstance(r,dict)}
+                    prepared=[];copies={}
+                    for row in candidates:
+                        version=row['exact_strategy_version']
+                        if version in existing:
+                            bound=existing[version]
+                            if bound.get('github_research_origin',{}).get('source_sha256')!=row['source_sha256']:raise RuntimeError('GITHUB_RESEARCH_EXISTING_VERSION_CONFLICT')
+                            continue
+                        record=next((r for r in cloud_knowledge.get('records',{}).values() if isinstance(r,dict) and r.get('exact_strategy_version')==version and r.get('source_sha256')==row['source_sha256'] and str(r.get('family_file') or r.get('canonical_source_file') or r.get('source_file') or '').replace(chr(92),'/')==row['canonical_source_file'] and str(r.get('strategy') or r.get('strategy_id') or '').upper()==str(row.get('strategy_id') or '').upper() and str(r.get('timeframe') or '').upper()==str(row.get('timeframe') or '').upper() and str(r.get('status')).upper()=='PASS' and (r.get('evaluation') or {}).get('pass') is True),None)
+                        if record is None:raise RuntimeError('GITHUB_RESEARCH_BOUND_BACKTEST_REQUIRED')
+                        selected={row['canonical_source_file']}
+                        def references(value):
+                            if isinstance(value,dict):
+                                for item in value.values():references(item)
+                            elif isinstance(value,list):
+                                for item in value:references(item)
+                            elif isinstance(value,str) and value.startswith('strategy_lab/results/') and value.endswith(('.json','.py','.parquet','.csv')):
+                                if value not in verified:raise RuntimeError('GITHUB_RESEARCH_EVIDENCE_MISSING')
+                                selected.add(value)
+                        references(row);references(record)
+                        for name in selected:
+                            if name.endswith(('runtime_sync_request.json','deployment_state.json','version_registry.json')) or '/strategy_config_pending_' in name:raise RuntimeError('GITHUB_RESEARCH_MUTABLE_PAYLOAD_FORBIDDEN')
+                            target=ROOT/name;raw=verified[name]
+                            if target.exists() and target.read_bytes()!=raw:raise RuntimeError('GITHUB_RESEARCH_FILE_COLLISION')
+                            copies[name]=raw
+                        imported=dict(row)
+                        imported['github_research_origin']={'repository':'hans1177/bbot-lab','checkpoint_commit':head,'source_commit':receipt['source_commit'],'source_sha256':row['source_sha256']}
+                        prepared.append((imported,record))
+                    for name,raw in copies.items():
+                        target=ROOT/name;target.parent.mkdir(parents=True,exist_ok=True)
+                        if not target.exists():
+                            with target.open('xb') as output:output.write(raw)
+                    for row,record in prepared:
+                        knowledge.record_result('github_release:'+row['exact_strategy_version'],record,failed=False)
+                        local.setdefault('entries',[]).append(row)
+                    if prepared:
+                        local['updated_at']=now();atomic_json(local_path,local)
+                    result={'status':'IMPORTED' if prepared else 'WAIT_FINAL_RESEARCH','imported':len(prepared),'checkpoint_commit':head,'updated_at':now(),'orders_touched':False}
+                    atomic_json(receipt_path,result)
+                log('[주문][AUTO_RELEASE][GITHUB_RESEARCH] '+json.dumps(result,ensure_ascii=True))
+            _github_pull_cache.update(result=result,error=None)
+            return result
+        except Exception as error:
+            _github_pull_cache['error']=str(error)
+            raise
+
 
     rc, out = run_ps(
         SYNC_FROM,
@@ -2253,6 +2376,13 @@ def recover_hold_if_authorized():
 def tick():
 
     roadmap_policy()
+    try:
+        if not REQUEST.exists() and not HOLD.exists():
+            pull("GITHUB_RESEARCH",research_only=True)
+    except Exception as error:
+        log("[주문][AUTO_RELEASE][GITHUB_RESEARCH_WAIT] "+str(error))
+        state("WAIT_GITHUB_RESEARCH",reason=str(error),release_applied=False)
+        return "GITHUB_RESEARCH_WAIT"
 
     if HOLD.exists():
         try:
@@ -2761,6 +2891,97 @@ def self_test():
     return 0
 
 
+def connect_github(code_ref):
+    """기존 로컬 배포 작업자를 GitHub 연구 소유권에 연결한다. 서버 파일은 쓰지 않는다."""
+    import ast,base64,re
+    if os.name!='nt':raise RuntimeError('GITHUB_CONNECTION_REQUIRES_EXISTING_WINDOWS_RELEASE_HOST')
+    if not re.fullmatch('[0-9a-f]{40}',str(code_ref or '')):raise RuntimeError('PINNED_CODE_COMMIT_REQUIRED')
+    if REQUEST.exists():raise RuntimeError('EXISTING_RELEASE_REQUEST_MUST_FINISH_FIRST')
+    hold_text=HOLD.read_text(encoding='utf-8-sig') if HOLD.exists() else None
+    if hold_text is not None and not hold_text.startswith('ROADMAP_RESEARCH_V1|'):raise RuntimeError('EXISTING_NONRESEARCH_HOLD_PRESERVED')
+    self_test()
+    sources={}
+    for name in ('v3_auto_runtime_release.py','v3_deployment.py'):
+        rc,out=run(['gh','api','repos/hans1177/bbot-lab/contents/strategy_lab/'+name+'?ref='+code_ref,'--jq','.content'],timeout=90)
+        if rc:raise RuntimeError('PINNED_CONNECTION_CODE_READ_FAILED')
+        raw=base64.b64decode(out);compile(raw.decode('utf-8-sig'),name,'exec');sources[name]=raw
+    target_auto=ROOT/'strategy_lab/v3_auto_runtime_release.py'
+    allowed={'da4e5ae9c5b9491bdfa1b13c65aad96cc6391c35f255d6a0547e50b0e7663fcf',hashlib.sha256(sources['v3_auto_runtime_release.py']).hexdigest()}
+    if sha256(target_auto) not in allowed:raise RuntimeError('LOCAL_RELEASE_WORKER_CHANGED_REVIEW_REQUIRED')
+    # 소스 선택 책임 함수만 교체하여 다른 로컬 배포 기능은 보존한다.
+    dep=ROOT/'strategy_lab/v3_deployment.py';old_dep=dep.read_text(encoding='utf-8-sig')
+    old_fn=next(n for n in ast.parse(old_dep).body if isinstance(n,ast.FunctionDef) and n.name=='source_for_pipeline')
+    new_dep=sources['v3_deployment.py'].decode('utf-8-sig')
+    new_fn=next(n for n in ast.parse(new_dep).body if isinstance(n,ast.FunctionDef) and n.name=='source_for_pipeline')
+    old_lines=old_dep.splitlines(keepends=True);new_lines=new_dep.splitlines(keepends=True)
+    old_lines[old_fn.lineno-1:old_fn.end_lineno]=new_lines[new_fn.lineno-1:new_fn.end_lineno]
+    dep_bytes=''.join(old_lines).encode('utf-8')
+    # 기존 Controller 진입 함수에서 로컬 연구만 멈춘다. 연구 원장·큐는 보존한다.
+    controller_path=ROOT/'strategy_lab/research_controller.py'
+    controller_text=controller_path.read_text(encoding='utf-8-sig');controller_lines=controller_text.splitlines(keepends=True)
+    guard='''    # GITHUB_RESEARCH_OWNER: 계산은 GitHub, 검증·배포는 기존 작업자.
+    if (load(LAB / "lab_config.json", {}).get("github_research") or {}).get("enabled") is True:
+        return {"action":"SKIP","reason":"GITHUB_RESEARCH_OWNER","orders_touched":False}
+'''
+    functions=[n for n in ast.parse(controller_text).body if isinstance(n,ast.FunctionDef) and n.name in {'managed_research_once','run_once'}]
+    if len(functions)!=2:raise RuntimeError('LOCAL_RESEARCH_ENTRYPOINTS_CHANGED')
+    for fn in sorted(functions,key=lambda n:n.lineno,reverse=True):
+        if 'GITHUB_RESEARCH_OWNER' not in ast.get_source_segment(controller_text,fn):controller_lines[fn.body[0].lineno-1:fn.body[0].lineno-1]=[guard]
+    controller_bytes=''.join(controller_lines).encode('utf-8')
+    updates={target_auto:sources['v3_auto_runtime_release.py'],dep:dep_bytes,controller_path:controller_bytes}
+    for path,raw in updates.items():compile(raw.decode('utf-8-sig'),str(path),'exec')
+    config_path=ROOT/'strategy_lab/lab_config.json';config_raw=config_path.read_bytes()
+    config=json.loads(config_raw.decode('utf-8-sig'))
+    config['github_research']={'enabled':True,'repository':'hans1177/bbot-lab','code_ref':code_ref,'engine_sha256':'3c665f886a02757e3b35444b437312385d88790c47c6346e90c64dfc0a5a86ed','qualification_required':'FULL_VALIDATION_AND_SEALED_FINAL_BLIND_THEN_EXISTING_LOCAL_SHADOW'}
+    # 완료 중인 연구 자식 프로세스는 종료하지 않는다. 재기동 스케줄러만 정리한다.
+    stop_script="Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^python(w)?\\.exe$' -and $_.CommandLine -like '*C:\\my\\bottest*' -and $_.CommandLine -match 'v3_auto_runtime_release\\.py' } | ForEach-Object { Stop-Process -Id $_.ProcessId -ErrorAction Stop }"
+    stamp=datetime.now().strftime('%Y%m%d_%H%M%S')
+    originals={path:path.read_bytes() for path in updates}
+    originals[config_path]=config_raw
+    for path,raw in originals.items():path.with_name(path.name+'.bak_github_'+stamp).write_bytes(raw)
+    worker=[str(ROOT/'.venv/Scripts/pythonw.exe'),str(target_auto),'--loop','15']
+    owned_hold='GITHUB_RESEARCH_CONNECTION|'+code_ref
+    if hold_text is None:
+        with HOLD.open('x',encoding='utf-8') as output:output.write(owned_hold)
+    if REQUEST.exists():
+        if hold_text is None and HOLD.read_text(encoding='utf-8-sig')==owned_hold:HOLD.unlink()
+        raise RuntimeError('EXISTING_RELEASE_REQUEST_MUST_FINISH_FIRST')
+    proc=subprocess.run(['powershell.exe','-NoProfile','-Command',stop_script],capture_output=True,text=True,timeout=30)
+    if proc.returncode:
+        if hold_text is None and HOLD.read_text(encoding='utf-8-sig')==owned_hold:HOLD.unlink()
+        subprocess.Popen(worker,cwd=str(ROOT),creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        raise RuntimeError('LOCAL_WORKER_STOP_FAILED')
+    try:
+        for path,raw in updates.items():
+            temp=path.with_name(path.name+'.github.tmp');temp.write_bytes(raw);os.replace(temp,path)
+        atomic_json(config_path,config)
+        expected_hold=hold_text if hold_text is not None else owned_hold
+        if not HOLD.exists() or HOLD.read_text(encoding='utf-8-sig')!=expected_hold:raise RuntimeError('CONNECTION_HOLD_CHANGED')
+        HOLD.unlink()
+        _github_pull_cache.clear()
+        deadline=time.monotonic()+90
+        while True:
+            try:
+                result=pull('GITHUB_CONNECT',research_only=True);break
+            except RuntimeError as error:
+                if str(error)!='RESEARCH_ALREADY_RUNNING' or time.monotonic()>=deadline:raise
+                _github_pull_cache.clear();time.sleep(2)
+    except Exception:
+        for path,raw in originals.items():
+            temp=path.with_name(path.name+'.github.rollback.tmp');temp.write_bytes(raw);os.replace(temp,path)
+        current_hold=HOLD.read_text(encoding='utf-8-sig') if HOLD.exists() else None
+        if current_hold is None or current_hold in (owned_hold,hold_text):
+            if hold_text is not None:HOLD.write_text(hold_text,encoding='utf-8')
+            elif HOLD.exists():HOLD.unlink()
+        subprocess.Popen(worker,cwd=str(ROOT),creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        raise
+    stop_research=stop_script.replace('v3_auto_runtime_release\\.py','local_continuous_research\\.py|roadmap_manager\\.py')
+    subprocess.run(['powershell.exe','-NoProfile','-Command',stop_research],capture_output=True,text=True,timeout=30)
+    subprocess.Popen(worker,cwd=str(ROOT),creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+    print(json.dumps({'connection':'CONFIGURED','github_research':result,'local_research_enabled':False,'existing_release_worker_started':True,'server_write':False,'real_order':False},ensure_ascii=True))
+    return 0
+
+
 def main():
 
     parser = argparse.ArgumentParser()
@@ -2777,7 +2998,15 @@ def main():
     )
 
 
+    parser.add_argument("--connect-github",action="store_true")
+    parser.add_argument("--code-ref")
+    parser.add_argument("--github-check",action="store_true")
     args = parser.parse_args()
+    if args.connect_github:
+        return connect_github(args.code_ref)
+    if args.github_check:
+        print(json.dumps(pull("GITHUB_RESEARCH",research_only=True),ensure_ascii=True))
+        return 0
 
     try:
         acquire_lock()

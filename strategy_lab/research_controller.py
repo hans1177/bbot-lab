@@ -652,6 +652,9 @@ def _dispatch_managed_bucket(bucket, work, held):
 
 
 def managed_research_once(held: bool) -> dict:
+    # GITHUB_RESEARCH_OWNER: 계산은 GitHub, 검증·배포는 기존 작업자.
+    if (load(LAB / "lab_config.json", {}).get("github_research") or {}).get("enabled") is True:
+        return {"action":"SKIP","reason":"GITHUB_RESEARCH_OWNER","orders_touched":False}
     if not held: return {"action":"GOVERNANCE_BLOCK","reason":"AUTO_RESEARCH_SERVER_PUSH_HOLD_REQUIRED"}
     sync=strategy_research.sync_new_pipeline_entries(); work=strategy_research.pipeline_work_status(); availability=_managed_availability(work)
     selection=task_queue.preview_auto_research_bucket(availability,bool(work.get("historical_backlog_mode")))
@@ -966,6 +969,9 @@ def managed_dry_run(include_inputs: bool = False, export_inputs=None) -> dict:
 
 
 def run_once(enable_research: bool = True) -> dict:
+    # GITHUB_RESEARCH_OWNER: 계산은 GitHub, 검증·배포는 기존 작업자.
+    if (load(LAB / "lab_config.json", {}).get("github_research") or {}).get("enabled") is True:
+        return {"action":"SKIP","reason":"GITHUB_RESEARCH_OWNER","orders_touched":False}
     constitution = governance.validate_constitution()
     if not constitution.get("ok"):
         return {"action": "GOVERNANCE_BLOCK", "reason": "ROADMAP_CONSTITUTION_INVALID", "detail": constitution}
