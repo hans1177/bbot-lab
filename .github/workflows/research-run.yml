@@ -281,7 +281,7 @@ jobs:
       - name: Run existing research controller
         id: research
         env:
-          REQUESTED_CYCLES: ${{ inputs.cycles || (github.event_name == 'push' && '1') || '8' }}
+          REQUESTED_CYCLES: ${{ inputs.cycles || '8' }}
         run: |
           set -o pipefail
           case "$REQUESTED_CYCLES" in 1|4|8) ;; *) exit 40 ;; esac
