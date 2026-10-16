@@ -1762,6 +1762,8 @@ def source_frame_for_symbol(
     # Monthly cache-like frame는
     # 한 번 만든 뒤 dataset 간 재사용.
     if symbol not in monthly_cache:
+        if not material_modules:
+            material_modules.update(load_material_modules())
 
         monthly_cache[
             symbol
@@ -2017,9 +2019,8 @@ def main():
 
     lab = load_lab_engine()
 
-    material_modules = (
-        load_material_modules()
-    )
+    # 재료 모듈은 월봉 CACHE_MATERIALS 경로에서만 필요하다.
+    material_modules = {}
 
     hard_pass_window = hard_pass_window_from_env()
     individual_trailing = individual_trailing_from_env()

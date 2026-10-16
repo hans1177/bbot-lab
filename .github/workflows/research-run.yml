@@ -1,0 +1,212 @@
+name: Research runtime
+on:
+  workflow_dispatch:
+    inputs:
+      cycles:
+        description: Maximum complete research cycles
+        type: choice
+        options: ['1', '4', '8']
+        default: '1'
+  schedule:
+    - cron: '15 * * * *'
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: research-runtime-single-worker
+  cancel-in-progress: false
+jobs:
+  research:
+    if: github.event_name != 'schedule' || github.event.repository.private == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      BBOT_LOCAL_ROOT: ${{ github.workspace }}/runtime
+      BBOT_AUTO_RESEARCH_MANAGER_V1: '1'
+      B_BOT_V3_SERVER_PUSH_HOLD: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Require private research storage
+        env:
+          IS_PRIVATE: ${{ github.event.repository.private }}
+        run: test "$IS_PRIVATE" = true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-research-test.txt
+      - name: Download fixed research inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/research-inputs"
+          gh release download research-input-v1 --repo "$GITHUB_REPOSITORY" --pattern start.zip --pattern extra.zip --dir "$RUNNER_TEMP/research-inputs"
+      - name: Verify and prepare research workspace
+        id: prepare
+        shell: python
+        run: |
+          import hashlib,json,os,re,shutil,zipfile
+          from pathlib import Path
+          root=Path(os.environ['BBOT_LOCAL_ROOT']); root.mkdir()
+          repo=Path(os.environ['GITHUB_WORKSPACE'])
+          inputs=Path(os.environ['RUNNER_TEMP'])/'research-inputs'
+          digest=hashlib.sha256((inputs/'start.zip').read_bytes()).hexdigest()
+          if digest!='ace276261e768dbcb520ebd61208d0425af4e9371028a36449100bfd00971e56':
+              raise RuntimeError('INITIAL_INPUT_ARCHIVE_HASH_MISMATCH')
+          shutil.copytree(repo/'strategy_lab',root/'strategy_lab',ignore=shutil.ignore_patterns('results','__pycache__','*.pyc'))
+          patterns=[rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',rb'(?:AKIA|ASIA)[A-Z0-9]{16}',rb'gh[pousr]_[A-Za-z0-9]{30,}',rb'\d{9,12}:[A-Za-z0-9_-]{35}']
+          seen=set()
+          for archive_name,manifest_name,schema in [('start.zip','FRESH_INPUT.json','B_BOT_RESEARCH_FRESH_INPUT_V1'),('extra.zip','EXTRA_INPUT.json','B_BOT_RESEARCH_EXTRA_INPUT_V1')]:
+              with zipfile.ZipFile(inputs/archive_name) as archive:
+                  manifest=json.loads(archive.read(manifest_name))
+                  if manifest.get('schema')!=schema or not isinstance(manifest.get('files'),dict):raise RuntimeError('INPUT_MANIFEST_INVALID')
+                  if set(archive.namelist())!=set(manifest['files'])|{manifest_name}:raise RuntimeError('UNLISTED_INPUT_FILES')
+                  for name,row in manifest['files'].items():
+                      target=(root/name).resolve()
+                      allowed=name in {'gate_lab_fast.py','gate_lab_exact_long_cache.parquet','ROADMAP_CONSTITUTION_V3.json','strategy_lab/lab_config.json'} or name.startswith(('data/candles/','backtest_data/')) and name.endswith('.parquet') or name.startswith('assist/') and name.endswith('.py')
+                      if not allowed or not target.is_relative_to(root.resolve()) or name in seen:raise RuntimeError('INPUT_PATH_FORBIDDEN')
+                      if archive.getinfo(name).file_size>512*1024**2:raise RuntimeError('INPUT_FILE_TOO_LARGE')
+                      raw=archive.read(name)
+                      if len(raw)!=row['bytes'] or hashlib.sha256(raw).hexdigest()!=row['sha256']:raise RuntimeError('INPUT_FILE_HASH_MISMATCH:'+name)
+                      if name.endswith(('.py','.json')) and any(re.search(pattern,raw) for pattern in patterns):raise RuntimeError('INPUT_CREDENTIAL_PATTERN:'+name)
+                      target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(raw);seen.add(name)
+          if (root/'ROADMAP_CONSTITUTION_V3.json').read_bytes()!=(repo/'ROADMAP_CONSTITUTION_V3.json').read_bytes():raise RuntimeError('RESEARCH_CONSTITUTION_MISMATCH')
+          if not list((root/'backtest_data').glob('*/30*.parquet')):raise RuntimeError('QUALIFIED_30M_HISTORY_REQUIRED')
+          (root/'INPUT_RECEIPT.json').write_text(json.dumps({name:hashlib.sha256((inputs/name).read_bytes()).hexdigest() for name in ('start.zip','extra.zip')}))
+          print('INPUT_HASHES_AND_RESEARCH_CONSTITUTION_OK')
+      - name: Locate latest research checkpoint
+        id: locate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?name=research-checkpoint&per_page=100" --slurp > "$RUNNER_TEMP/research-artifacts.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/research-run.yml/runs?status=success&per_page=1" > "$RUNNER_TEMP/research-prior-runs.json"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          temp=Path(os.environ['RUNNER_TEMP'])
+          value=json.loads((temp/'research-artifacts.json').read_text())
+          def flatten(x):
+              if isinstance(x,list):return [row for item in x for row in flatten(item)]
+              if isinstance(x,dict) and 'artifacts' in x:return flatten(x['artifacts'])
+              return [x] if isinstance(x,dict) and x.get('name')=='research-checkpoint' and not x.get('expired') else []
+          rows=sorted(flatten(value),key=lambda row:row['created_at'],reverse=True)
+          if rows:
+              run_id=int(rows[0]['workflow_run']['id'])
+              with open(os.environ['GITHUB_OUTPUT'],'a') as output:output.write('run_id='+str(run_id)+'\n')
+          elif json.loads((temp/'research-prior-runs.json').read_text()).get('total_count',0):
+              raise RuntimeError('PREVIOUS_CHECKPOINT_MISSING_NO_SILENT_RESET')
+          else:
+              print('FIRST_RUN_FRESH_RESEARCH')
+          PY
+      - name: Download checkpoint
+        if: steps.locate.outputs.run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECKPOINT_RUN: ${{ steps.locate.outputs.run_id }}
+        run: gh run download "$CHECKPOINT_RUN" --repo "$GITHUB_REPOSITORY" --name research-checkpoint --dir "$RUNNER_TEMP/research-checkpoint-in"
+      - name: Restore exact research state
+        id: restore
+        shell: python
+        run: |
+          import hashlib,json,os,zipfile
+          from pathlib import Path
+          root=Path(os.environ['BBOT_LOCAL_ROOT']);folder=Path(os.environ['RUNNER_TEMP'])/'research-checkpoint-in'
+          if folder.exists():
+              receipt=json.loads((folder/'CHECKPOINT.json').read_text())
+              raw=(folder/'checkpoint.zip').read_bytes()
+              if receipt['schema']!='B_BOT_RESEARCH_CHECKPOINT_V1' or hashlib.sha256(raw).hexdigest()!=receipt['archive_sha256']:raise RuntimeError('CHECKPOINT_HASH_MISMATCH')
+              if receipt['constitution_sha256']!=hashlib.sha256((root/'ROADMAP_CONSTITUTION_V3.json').read_bytes()).hexdigest():raise RuntimeError('CHECKPOINT_CONSTITUTION_MISMATCH')
+              if receipt['engine_sha256']!=hashlib.sha256((root/'strategy_lab/run_strategy.py').read_bytes()).hexdigest():raise RuntimeError('CHECKPOINT_ENGINE_MISMATCH')
+              if receipt['input_archives']!=json.loads((root/'INPUT_RECEIPT.json').read_text()):raise RuntimeError('CHECKPOINT_INPUTS_CHANGED')
+              with zipfile.ZipFile(folder/'checkpoint.zip') as archive:
+                  if set(archive.namelist())!=set(receipt['files']):raise RuntimeError('CHECKPOINT_FILE_SET_MISMATCH')
+                  for name,row in receipt['files'].items():
+                      target=(root/name).resolve()
+                      if not name.startswith('strategy_lab/results/') or not target.is_relative_to(root.resolve()):raise RuntimeError('CHECKPOINT_PATH_FORBIDDEN')
+                      if archive.getinfo(name).file_size>512*1024**2:raise RuntimeError('CHECKPOINT_FILE_TOO_LARGE')
+                      data=archive.read(name)
+                      if len(data)!=row['bytes'] or hashlib.sha256(data).hexdigest()!=row['sha256']:raise RuntimeError('CHECKPOINT_FILE_HASH_MISMATCH')
+                      target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(data)
+              print('CHECKPOINT_RESTORED',receipt['source_run_id'])
+          else:
+              print('FRESH_RESEARCH_NO_LOCAL_QUEUE_IMPORTED')
+      - name: Existing controller preparation check
+        run: |
+          python "$BBOT_LOCAL_ROOT/strategy_lab/research_controller.py" --mode managed-dry-run --skip-server-health > "$RUNNER_TEMP/research-preflight.json"
+          python -c "import json,os; from pathlib import Path; r=json.loads((Path(os.environ['RUNNER_TEMP'])/'research-preflight.json').read_text()); assert r['ok'] and r['orders_touched'] is False"
+      - name: Run existing research controller
+        id: research
+        env:
+          REQUESTED_CYCLES: ${{ inputs.cycles || '8' }}
+        run: |
+          set -o pipefail
+          case "$REQUESTED_CYCLES" in 1|4|8) ;; *) exit 40 ;; esac
+          python "$BBOT_LOCAL_ROOT/strategy_lab/research_controller.py" --mode loop --enable-research --max-cycles "$REQUESTED_CYCLES" --sleep-sec 1 | tee "$RUNNER_TEMP/research-cycles.jsonl"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          rows=[json.loads(line) for line in (Path(os.environ['RUNNER_TEMP'])/'research-cycles.jsonl').read_text().splitlines() if line.strip()]
+          def reasons(value):
+              if isinstance(value,dict):
+                  for key,item in value.items():
+                      if key=='reason':yield str(item)
+                      yield from reasons(item)
+              elif isinstance(value,list):
+                  for item in value:yield from reasons(item)
+          if not rows or any(row.get('action')!='AUTO_RESEARCH_MANAGER_STAGE10' for row in rows):raise RuntimeError('CANONICAL_RESEARCH_NOT_EXECUTED')
+          if any(reason in {'RUN_STRATEGY_FAIL','RESULT_NOT_FOUND'} for row in rows for reason in reasons(row)):raise RuntimeError('RESEARCH_EXECUTION_FAILED_CHECK_PRIVATE_EVIDENCE')
+          print('RESEARCH_EXECUTION_AND_RESULTS_RECORDED; STRATEGY_QUALIFICATION_IS_SEPARATE')
+          PY
+      - name: Preserve research checkpoint
+        id: checkpoint
+        if: always() && steps.prepare.outcome == 'success' && steps.restore.outcome == 'success'
+        shell: python
+        run: |
+          import hashlib,json,os,zipfile
+          from pathlib import Path
+          root=Path(os.environ['BBOT_LOCAL_ROOT']);out=Path(os.environ['RUNNER_TEMP'])/'research-checkpoint-out';out.mkdir()
+          state=root/'strategy_lab/results'
+          files=[path for path in state.rglob('*') if path.is_file() and path.suffix.lower() in {'.json','.jsonl','.py','.csv','.parquet'} and '__pycache__' not in path.parts]
+          if not files:raise RuntimeError('RESEARCH_STATE_NOT_CREATED')
+          receipt={'schema':'B_BOT_RESEARCH_CHECKPOINT_V1','source_run_id':os.environ['GITHUB_RUN_ID'],'source_commit':os.environ['GITHUB_SHA'],'engine_sha256':hashlib.sha256((root/'strategy_lab/run_strategy.py').read_bytes()).hexdigest(),'input_archives':json.loads((root/'INPUT_RECEIPT.json').read_text()),'constitution_sha256':hashlib.sha256((root/'ROADMAP_CONSTITUTION_V3.json').read_bytes()).hexdigest(),'files':{}}
+          with zipfile.ZipFile(out/'checkpoint.zip','w',zipfile.ZIP_DEFLATED,compresslevel=1) as archive:
+              for path in sorted(files):
+                  if path.is_symlink() or not path.resolve().is_relative_to(state.resolve()):raise RuntimeError('STATE_PATH_FORBIDDEN')
+                  if path.stat().st_size>512*1024**2:raise RuntimeError('STATE_FILE_TOO_LARGE')
+                  raw=path.read_bytes();name=path.relative_to(root).as_posix()
+                  if path.suffix=='.json':json.loads(raw.decode('utf-8-sig'))
+                  archive.writestr(name,raw);receipt['files'][name]={'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
+          receipt['archive_sha256']=hashlib.sha256((out/'checkpoint.zip').read_bytes()).hexdigest()
+          (out/'CHECKPOINT.json').write_text(json.dumps(receipt,indent=2))
+          print('RESEARCH_CHECKPOINT_SAVED',len(files))
+      - name: Upload private checkpoint
+        id: checkpoint_upload
+        if: always() && steps.checkpoint.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: research-checkpoint
+          path: ${{ runner.temp }}/research-checkpoint-out/
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error
+      - name: Retain latest three checkpoint snapshots
+        if: always() && steps.checkpoint_upload.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?name=research-checkpoint&per_page=100" --slurp > "$RUNNER_TEMP/research-retention.json"
+          python - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          def flatten(value):
+              if isinstance(value,list):return [row for item in value for row in flatten(item)]
+              if isinstance(value,dict) and 'artifacts' in value:return flatten(value['artifacts'])
+              return [value] if isinstance(value,dict) and value.get('name')=='research-checkpoint' else []
+          rows=sorted(flatten(json.loads((Path(os.environ['RUNNER_TEMP'])/'research-retention.json').read_text())),key=lambda row:row['created_at'],reverse=True)
+          for row in rows[3:]:
+              artifact_id=int(row['id'])
+              subprocess.run(['gh','api','-X','DELETE',f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/artifacts/{artifact_id}"],check=True)
+          PY
