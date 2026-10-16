@@ -14,14 +14,7 @@ import v3_hypothesis_factory as hf
 
 SCHEMA = "B_BOT_MEMORY_HYPOTHESIS_WAVE_V1"
 
-TF_ORDER = (
-    "30M",
-    "1H",
-    "6H",
-    "12H",
-    "1D",
-    "1W",
-)
+TF_ORDER = tuple(hf.TF_ORDER)
 
 # Fixed before seeing this wave's results.
 # This is a finite next-wave research domain.

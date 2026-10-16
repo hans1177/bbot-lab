@@ -1,5 +1,8 @@
 name: Research runtime
 on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/research-run.yml']
   workflow_dispatch:
     inputs:
       cycles:
@@ -37,12 +40,31 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install -r requirements-research-test.txt
-      - name: Download fixed research inputs
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Checkout fixed private input revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 1153b49dc173eedf45bef023b06b2e873b2985ef
+          path: research-inputs
+          persist-credentials: false
+      - name: Assemble verified research inputs
+        shell: python
         run: |
-          mkdir -p "$RUNNER_TEMP/research-inputs"
-          gh release download research-input-v1 --repo "$GITHUB_REPOSITORY" --pattern start.zip --pattern extra.zip --dir "$RUNNER_TEMP/research-inputs"
+          import hashlib,json,os
+          from pathlib import Path
+          source=Path(os.environ['GITHUB_WORKSPACE'])/'research-inputs'
+          out=Path(os.environ['RUNNER_TEMP'])/'research-inputs';out.mkdir()
+          manifest=json.loads((source/'INPUT.json').read_text())
+          if manifest.get('schema')!='B_BOT_FIXED_RESEARCH_INPUT_PARTS_V1':raise RuntimeError('INPUT_PARTS_SCHEMA')
+          with (out/'start.zip').open('wb') as target:
+              for index,row in enumerate(manifest['parts']):
+                  expected='start.zip.'+str(index).zfill(3)
+                  if row['name']!=expected:raise RuntimeError('INPUT_PART_ORDER')
+                  raw=(source/('chunks'+str(index//30).zfill(2))/expected).read_bytes()
+                  if len(raw)!=row['bytes'] or hashlib.sha256(raw).hexdigest()!=row['sha256']:raise RuntimeError('INPUT_PART_HASH')
+                  target.write(raw)
+          archive=out/'start.zip'
+          if archive.stat().st_size!=manifest['archive_bytes'] or hashlib.sha256(archive.read_bytes()).hexdigest()!=manifest['archive_sha256']:raise RuntimeError('INPUT_ARCHIVE_HASH')
+          print('FIXED_PRIVATE_INPUT_REASSEMBLED_AND_VERIFIED')
       - name: Verify and prepare research workspace
         id: prepare
         shell: python
@@ -58,7 +80,7 @@ jobs:
           shutil.copytree(repo/'strategy_lab',root/'strategy_lab',ignore=shutil.ignore_patterns('results','__pycache__','*.pyc'))
           patterns=[rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',rb'(?:AKIA|ASIA)[A-Z0-9]{16}',rb'gh[pousr]_[A-Za-z0-9]{30,}',rb'\d{9,12}:[A-Za-z0-9_-]{35}']
           seen=set()
-          for archive_name,manifest_name,schema in [('start.zip','FRESH_INPUT.json','B_BOT_RESEARCH_FRESH_INPUT_V1'),('extra.zip','EXTRA_INPUT.json','B_BOT_RESEARCH_EXTRA_INPUT_V1')]:
+          for archive_name,manifest_name,schema in [('start.zip','FRESH_INPUT.json','B_BOT_RESEARCH_FRESH_INPUT_V1')]:
               with zipfile.ZipFile(inputs/archive_name) as archive:
                   manifest=json.loads(archive.read(manifest_name))
                   if manifest.get('schema')!=schema or not isinstance(manifest.get('files'),dict):raise RuntimeError('INPUT_MANIFEST_INVALID')
@@ -73,8 +95,14 @@ jobs:
                       if name.endswith(('.py','.json')) and any(re.search(pattern,raw) for pattern in patterns):raise RuntimeError('INPUT_CREDENTIAL_PATTERN:'+name)
                       target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(raw);seen.add(name)
           if (root/'ROADMAP_CONSTITUTION_V3.json').read_bytes()!=(repo/'ROADMAP_CONSTITUTION_V3.json').read_bytes():raise RuntimeError('RESEARCH_CONSTITUTION_MISMATCH')
-          if not list((root/'backtest_data').glob('*/30*.parquet')):raise RuntimeError('QUALIFIED_30M_HISTORY_REQUIRED')
-          (root/'INPUT_RECEIPT.json').write_text(json.dumps({name:hashlib.sha256((inputs/name).read_bytes()).hexdigest() for name in ('start.zip','extra.zip')}))
+          config_path=root/'strategy_lab/lab_config.json'
+          config=json.loads(config_path.read_text(encoding='utf-8-sig'))
+          config['research_candidate_fill_timeframes']=['1H','6H','12H','1D','1W']
+          config_path.write_text(json.dumps(config,indent=2))
+          print('STARTUP_FRAMES=1H,6H,12H,1D,1W; 30M_DEFERRED_QUALIFIED_HISTORY_REQUIRED')
+          receipt={name:hashlib.sha256((inputs/name).read_bytes()).hexdigest() for name in ('start.zip',)}
+          receipt['research_scope']=config['research_candidate_fill_timeframes']
+          (root/'INPUT_RECEIPT.json').write_text(json.dumps(receipt))
           print('INPUT_HASHES_AND_RESEARCH_CONSTITUTION_OK')
       - name: Locate latest research checkpoint
         id: locate
@@ -140,7 +168,7 @@ jobs:
       - name: Run existing research controller
         id: research
         env:
-          REQUESTED_CYCLES: ${{ inputs.cycles || '8' }}
+          REQUESTED_CYCLES: ${{ inputs.cycles || (github.event_name == 'push' && '1') || '8' }}
         run: |
           set -o pipefail
           case "$REQUESTED_CYCLES" in 1|4|8) ;; *) exit 40 ;; esac
@@ -189,6 +217,7 @@ jobs:
         with:
           name: research-checkpoint
           path: ${{ runner.temp }}/research-checkpoint-out/
+          overwrite: true
           compression-level: 0
           retention-days: 14
           if-no-files-found: error

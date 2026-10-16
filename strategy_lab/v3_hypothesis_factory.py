@@ -41,6 +41,13 @@ GENERATED = V3 / "generated_safe_grammar"
 RUNNER = LAB / "run_strategy.py"
 
 TF_ORDER = ["30M", "1H", "6H", "12H", "1D", "1W"]
+_scope_path = LAB / "lab_config.json"
+if _scope_path.exists():
+    _scope = json.loads(_scope_path.read_text(encoding="utf-8-sig")).get("research_candidate_fill_timeframes")
+    if _scope is not None:
+        if not isinstance(_scope, list) or not _scope or any(str(tf).upper() not in TF_ORDER for tf in _scope):
+            raise RuntimeError("INVALID_RESEARCH_TIMEFRAME_SCOPE")
+        TF_ORDER = list(dict.fromkeys(str(tf).upper() for tf in _scope))
 WINDOWS = [12, 18, 24, 32, 48, 64]
 THRESHOLDS = [0.4, 0.7, 1.0, 1.3]
 MODES = ["TREND_Z", "CHANNEL_Z"]
