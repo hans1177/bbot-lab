@@ -1247,7 +1247,7 @@ def pull(label, research_only=False, runtime_feedback=False):
         import base64,re,tempfile,urllib.request,urllib.error
         import pandas as pd
         if os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('GITHUB_REPOSITORY')!='hans1177/bbot-lab' or ROOT.resolve()==Path('/home/ec2-user/bot'):raise RuntimeError('GITHUB_ISOLATED_FEEDBACK_ONLY')
-        if REQUEST.exists():return {'status':'WAIT_EXISTING_RUNTIME_REQUEST'}
+        if REQUEST.exists() and label!='GITHUB_CLOUD_VALIDATION':return {'status':'WAIT_EXISTING_RUNTIME_REQUEST'}
         token=os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')
         if not token:raise RuntimeError('GITHUB_FEEDBACK_READ_TOKEN_REQUIRED')
         def api(path):
@@ -2432,11 +2432,29 @@ def recover_hold_if_authorized():
 
 
 
-def tick():
+def tick(cloud_validation=False):
 
     roadmap_policy()
+    if cloud_validation:
+        if os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('GITHUB_REPOSITORY')!='hans1177/bbot-lab' or ROOT.resolve()==Path('/home/ec2-user/bot'):
+            raise RuntimeError('ISOLATED_GITHUB_VALIDATION_REQUIRED')
+        feedback=pull('GITHUB_CLOUD_VALIDATION',runtime_feedback=True)
+        if feedback.get('status')!='SERVER_FEEDBACK_IMPORTED':
+            state('WAIT_SERVER_FEEDBACK',reason=feedback.get('status'),release_applied=False)
+            return 'WAIT_SERVER_FEEDBACK'
+        if REQUEST.is_file():
+            req=read_request();validate_request(req)
+            active=json.loads((ROOT/'strategy_config.json').read_text(encoding='utf-8-sig'))
+            rows=(active.get('r4_runtime') or {}).get('strategy_instances') or {}
+            ids=req.get('strategy_instance_ids') or [req.get('strategy_instance_id')]
+            if ids and all(iid and isinstance(rows.get(iid),dict) and rows[iid].get('exact_strategy_version')==req.get('strategy_version') and rows[iid].get('server_activation_authorized') is True and rows[iid].get('approved_for_server_release') is True for iid in ids):
+                v3_deployment.mark_applied(req)
+                LAST_APPLIED.write_bytes(REQUEST.read_bytes());REQUEST.unlink()
+                state('APPLIED',request_id=req['request_id'],server_confirmation=True,release_applied=True)
+                return 'SERVER_APPLICATION_CONFIRMED'
+
     try:
-        if not REQUEST.exists() and not HOLD.exists():
+        if not cloud_validation and not REQUEST.exists() and not HOLD.exists():
             pull("GITHUB_RESEARCH",research_only=True)
     except Exception as error:
         log("[주문][AUTO_RELEASE][GITHUB_RESEARCH_WAIT] "+str(error))
@@ -2839,6 +2857,14 @@ def tick():
                 "REQUEST_CHANGED_DURING_VERIFY"
             )
 
+        if cloud_validation:
+            receipt=json.loads((RESULTS/'runtime_feedback_receipt.json').read_text())
+            if not 0<=time.time()-float(receipt.get('source_heartbeat_epoch') or 0)<=180:
+                state('WAIT_SERVER_FEEDBACK',request_id=request_id,release_applied=False)
+                return 'WAIT_SERVER_FEEDBACK'
+            state('VALIDATED_FOR_SERVER',request_id=request_id,request_sha256=sha256(REQUEST),base_config_sha256=receipt['config_sha256'],validated_at_epoch=time.time(),canonical_verifiers=6,release_applied=False)
+            return 'VALIDATED_FOR_SERVER'
+
         pull(
             "PRE_RELEASE_PULL"
         )
@@ -3240,7 +3266,7 @@ print(json.dumps({'service':service,'refs':refs,'files':files,'operating_files_c
     return 0
 
 
-def install_server_receiver(code_ref, enable_feedback=False):
+def install_server_receiver(code_ref, enable_feedback=False, enable_registration=False):
     """기존 Runtime 모듈의 수신 명령만 설치한다. 거래 활성화와 검증기 이식은 별도 gate다."""
     import base64,re
     if os.name!='nt' or not re.fullmatch('[0-9a-f]{40}',str(code_ref or '')):raise RuntimeError('PINNED_WINDOWS_SETUP_REQUIRED')
@@ -3253,6 +3279,7 @@ def install_server_receiver(code_ref, enable_feedback=False):
             raise RuntimeError('RECEIVER_SETUP_GITHUB_FAILED:'+proc.stderr[-800:])
         return json.loads(proc.stdout)
     if api('').get('private') is not True:raise RuntimeError('PRIVATE_REPOSITORY_REQUIRED')
+    if enable_registration and not enable_feedback:raise RuntimeError('REGISTRATION_REQUIRES_LIVE_FEEDBACK')
     if enable_feedback:
         key_script=r'''import json,os,subprocess
 from pathlib import Path
@@ -3288,7 +3315,7 @@ print(json.dumps({'public_key':' '.join(public.split()[:2])}))
     tree=api('/git/trees',{'tree':entries});commit=api('/git/commits',{'message':'Preserve existing release checks for Linux portability review','tree':tree['sha'],'parents':[parent] if parent else []})
     if parent:api('/git/refs/heads/release-checks',{'sha':commit['sha'],'force':False})
     else:api('/git/refs',{'ref':'refs/heads/release-checks','sha':commit['sha']})
-    payload={'runtime':base64.b64encode(runtime).decode(),'runtime_sha256':hashlib.sha256(runtime).hexdigest(),'baseline_sha256':'1cb77962db51e26fccc83cdcbb88b5f801fb0c2dd0d5b29aef3a7637bf486cfb','code_ref':code_ref,'enable_feedback':bool(enable_feedback),'previous_receiver_sha256':'b18cc4eec9d34bce339503aebb1de9eae854e7c6889310bea87c9a544d210baa'}
+    payload={'runtime':base64.b64encode(runtime).decode(),'runtime_sha256':hashlib.sha256(runtime).hexdigest(),'baseline_sha256':'1cb77962db51e26fccc83cdcbb88b5f801fb0c2dd0d5b29aef3a7637bf486cfb','code_ref':code_ref,'enable_feedback':bool(enable_feedback),'enable_registration':bool(enable_registration),'installed_feedback_sha256':'f93b37ad38f725e1d320a2380305f3d5e00e02639eaeccc1d4de4c5a3841d017','previous_receiver_sha256':'b18cc4eec9d34bce339503aebb1de9eae854e7c6889310bea87c9a544d210baa'}
     remote='import base64,json\npayload=json.loads(base64.b64decode('+repr(base64.b64encode(json.dumps(payload).encode()).decode())+'))\n'+r'''
 import fcntl,hashlib,importlib.util,os,subprocess,tempfile,time
 from pathlib import Path
@@ -3301,12 +3328,12 @@ before_pid=service()
 if not before_pid or before_pid=='0':raise RuntimeError('R4_SERVICE_NOT_RUNNING')
 if target.is_symlink():raise RuntimeError('RUNTIME_SOURCE_SYMLINK')
 old=target.read_bytes();old_sha=hashlib.sha256(old).hexdigest();new=base64.b64decode(payload['runtime'])
-if old_sha not in {payload['baseline_sha256'],payload['previous_receiver_sha256'],payload['runtime_sha256']}:raise RuntimeError('AWS_RUNTIME_SOURCE_CHANGED')
+if old_sha not in {payload['baseline_sha256'],payload['previous_receiver_sha256'],payload.get('installed_feedback_sha256'),payload['runtime_sha256']}:raise RuntimeError('AWS_RUNTIME_SOURCE_CHANGED')
 if hashlib.sha256(new).hexdigest()!=payload['runtime_sha256']:raise RuntimeError('INSTALL_SOURCE_HASH')
 compile(new,'strategy_runtime.py','exec')
 settings=state/'r4_github_receiver.json';old_settings=settings.read_bytes() if settings.exists() else None
 if settings.is_symlink():raise RuntimeError('RECEIVER_SETTINGS_SYMLINK')
-config={'enabled':True,'repository':'hans1177/bbot-lab','branch':'runtime-candidates','constitution_hash':'fcf9a69d6100b8638cf031680eef1b5e234ae10edd66f808e2c08631edced76a','engine_sha256':'3c665f886a02757e3b35444b437312385d88790c47c6346e90c64dfc0a5a86ed','code_ref':payload['code_ref'],'automatic_registration_enabled':False,'feedback_enabled':payload.get('enable_feedback') is True}
+config={'enabled':True,'repository':'hans1177/bbot-lab','branch':'runtime-candidates','constitution_hash':'fcf9a69d6100b8638cf031680eef1b5e234ae10edd66f808e2c08631edced76a','engine_sha256':'3c665f886a02757e3b35444b437312385d88790c47c6346e90c64dfc0a5a86ed','code_ref':payload['code_ref'],'automatic_registration_enabled':payload.get('enable_registration') is True,'feedback_enabled':payload.get('enable_feedback') is True}
 unit="""[Unit]
 Description=B-Bot verified GitHub candidate receipt
 After=network-online.target
@@ -3318,9 +3345,9 @@ Environment=BOT_BASE_DIR=/home/ec2-user/bot
 ExecStart=/home/ec2-user/bot/venv/bin/python -B /home/ec2-user/bot/strategy_runtime.py --receive-github
 TimeoutStartSec=90
 NoNewPrivileges=true
-PrivateTmp=true
+PrivateTmp=false
 ProtectSystem=strict
-ReadWritePaths=/home/ec2-user/bot/state /home/ec2-user/bot/logs
+ReadWritePaths=/home/ec2-user/bot
 ReadOnlyPaths=/home/ec2-user/.ssh
 StandardOutput=null
 StandardError=null
@@ -3337,6 +3364,7 @@ WantedBy=timers.target
 """
 def sudo(*args):subprocess.run(['sudo','-n',*args],check=True,capture_output=True,timeout=30)
 timer_was_active=subprocess.run(['systemctl','is-active','--quiet','bbot-github-receive.timer'],capture_output=True,timeout=10).returncode==0
+units_before={name:(Path('/etc/systemd/system')/name).read_bytes() if (Path('/etc/systemd/system')/name).is_file() else None for name in ('bbot-github-receive.service','bbot-github-receive.timer')}
 with tempfile.TemporaryDirectory(prefix='github-receive-install-',dir=str(state)) as folder:
     temp=Path(folder);module=temp/'strategy_runtime.py';module.write_bytes(new)
     env=os.environ.copy();env['BOT_BASE_DIR']=str(root);env['PYTHONDONTWRITEBYTECODE']='1'
@@ -3352,7 +3380,8 @@ with tempfile.TemporaryDirectory(prefix='github-receive-install-',dir=str(state)
                 if time.monotonic()>=deadline:
                     raise RuntimeError('RECEIVER_STILL_BUSY')
                 time.sleep(2)
-        settings_tmp=settings.with_suffix('.install.tmp');settings_tmp.write_text(json.dumps(config,sort_keys=True),encoding='utf-8');os.replace(settings_tmp,settings)
+        validation_config={**config,'automatic_registration_enabled':False}
+        settings_tmp=settings.with_suffix('.install.tmp');settings_tmp.write_text(json.dumps(validation_config,sort_keys=True),encoding='utf-8');os.replace(settings_tmp,settings)
         received=subprocess.run([str(root/'venv/bin/python'),'-B',str(module),'--receive-github'],env=env,capture_output=True,text=True,timeout=90)
         if received.returncode:raise RuntimeError('AWS_CANDIDATE_RECEIPT_TEST_FAILED:'+received.stdout[-500:])
         result=json.loads(received.stdout)
@@ -3360,7 +3389,9 @@ with tempfile.TemporaryDirectory(prefix='github-receive-install-',dir=str(state)
         (temp/'bbot-github-receive.service').write_text(unit);(temp/'bbot-github-receive.timer').write_text(timer)
         sudo('install','-m','644',str(temp/'bbot-github-receive.service'),'/etc/systemd/system/bbot-github-receive.service')
         sudo('install','-m','644',str(temp/'bbot-github-receive.timer'),'/etc/systemd/system/bbot-github-receive.timer')
-        sudo('systemctl','daemon-reload');sudo('systemctl','enable','--now','bbot-github-receive.timer')
+        sudo('systemctl','daemon-reload')
+        settings_tmp=settings.with_suffix('.install.tmp');settings_tmp.write_text(json.dumps(config,sort_keys=True),encoding='utf-8');os.replace(settings_tmp,settings)
+        sudo('systemctl','enable','--now','bbot-github-receive.timer')
         if service()!=before_pid:raise RuntimeError('R4_SERVICE_CHANGED_DURING_RECEIVER_INSTALL')
         active=subprocess.run(['systemctl','is-active','bbot-github-receive.timer'],capture_output=True,text=True,check=True,timeout=10).stdout.strip()
     except Exception:
@@ -3370,10 +3401,15 @@ with tempfile.TemporaryDirectory(prefix='github-receive-install-',dir=str(state)
             rollback=target.with_name(target.name+'.github.rollback');rollback.write_bytes(old);os.replace(rollback,target)
         if old_settings is None:settings.unlink(missing_ok=True)
         else:settings.write_bytes(old_settings)
-        if timer_was_active:sudo('systemctl','start','bbot-github-receive.timer')
+        for name,raw in units_before.items():
+            if raw is None:sudo('rm','-f',str(Path('/etc/systemd/system')/name))
+            else:
+                original=temp/('restore-'+name);original.write_bytes(raw);sudo('install','-m','644',str(original),str(Path('/etc/systemd/system')/name))
+        sudo('systemctl','daemon-reload')
+        if timer_was_active:sudo('systemctl','enable','--now','bbot-github-receive.timer')
         raise
     for path in sorted(backup.glob('strategy_runtime.*.py'),key=lambda p:p.stat().st_mtime,reverse=True)[2:]:path.unlink()
-print(json.dumps({'receiver':'AWS_DIRECT_RECEIVER_ACTIVE','timer':active,'r4_pid':before_pid,'service_restart':False,'operating_config_changed':False,'database_opened':False,'automatic_registration_enabled':False,'feedback_enabled':config['feedback_enabled'],'receipt':result}))
+print(json.dumps({'receiver':'AWS_DIRECT_RECEIVER_ACTIVE','timer':active,'r4_pid':before_pid,'service_restart':False,'operating_config_changed':False,'database_opened':False,'automatic_registration_enabled':config['automatic_registration_enabled'],'feedback_enabled':config['feedback_enabled'],'receipt':result}))
 '''
     command=['ssh','-o','BatchMode=yes','-o','ConnectTimeout=15','-o','ServerAliveInterval=5','-o','ServerAliveCountMax=3','-i',r'C:\my\han.pem','ec2-user@13.159.128.120','/home/ec2-user/bot/venv/bin/python -B -']
     result=subprocess.run(command,input=remote,text=True,encoding='utf-8',capture_output=True,timeout=240)
@@ -3398,6 +3434,7 @@ def main():
     )
 
 
+    parser.add_argument("--cloud-validation",action="store_true")
     parser.add_argument("--pull-runtime-feedback",action="store_true")
     parser.add_argument("--prepare-context",action="store_true")
     parser.add_argument("--verify-context",action="store_true")
@@ -3405,10 +3442,16 @@ def main():
     parser.add_argument("--prepare-release-context",action="store_true")
     parser.add_argument("--install-server-receiver",action="store_true")
     parser.add_argument("--enable-feedback",action="store_true")
+    parser.add_argument("--enable-registration",action="store_true")
     parser.add_argument("--connect-github",action="store_true")
     parser.add_argument("--code-ref")
     parser.add_argument("--github-check",action="store_true")
     args = parser.parse_args()
+    if args.cloud_validation:
+        result=tick(cloud_validation=True)
+        print(json.dumps({'status':result,'server_write':False,'orders_touched':False}))
+        if result=='HARD_STOP':raise RuntimeError('CLOUD_CANONICAL_RELEASE_VALIDATION_FAILED')
+        return 0
     if args.pull_runtime_feedback:
         print(json.dumps(pull("GITHUB_RUNTIME",runtime_feedback=True),ensure_ascii=True))
         return 0
@@ -3434,7 +3477,7 @@ def main():
         return 0
 
     if args.install_server_receiver:
-        return install_server_receiver(args.code_ref,enable_feedback=args.enable_feedback)
+        return install_server_receiver(args.code_ref,enable_feedback=args.enable_feedback,enable_registration=args.enable_registration)
 
     if args.prepare_release_context:
         return prepare_server(release_context=True)

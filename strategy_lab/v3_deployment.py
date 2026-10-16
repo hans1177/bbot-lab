@@ -2356,14 +2356,21 @@ def materialize_local_ready_request():
             or ""
         ).strip()
 
-        preserve_active_frame = (
-            active_state_tier in {
-                "CANARY",
-                "SMALL",
-                "NORMAL",
-            }
-            and bool(active_state_si)
-            and active_state_si != strategy_instance_id
+        # 서버 설정이 실제 활성 인스턴스의 기준이다. 새 연구소의 배포 이력이
+        # 비어 있어도 기존 대표 프레임을 새 카나리로 교체하지 않는다.
+        active_cfg = load(CONFIG, {})
+        active_cfg_frame = ((active_cfg.get("frames") or {}).get(str(tf).upper()) or {})
+        active_live_instances = [
+            row for iid, row in ((active_cfg.get("r4_runtime") or {}).get("strategy_instances") or {}).items()
+            if isinstance(row, dict) and str(iid) != strategy_instance_id
+            and str(row.get("timeframe") or "").upper() == str(tf).upper()
+            and str(row.get("tier") or "").upper() in {"CANARY", "SMALL", "NORMAL"}
+            and row.get("server_activation_authorized") is True
+        ]
+        preserve_active_frame = bool(active_cfg_frame) and (
+            bool(active_live_instances)
+            or (active_state_tier in {"CANARY", "SMALL", "NORMAL"}
+                and bool(active_state_si) and active_state_si != strategy_instance_id)
         )
 
         if preserve_active_frame:
@@ -8811,7 +8818,7 @@ def create_policy_canary_request(version_id):
 
 
 # ================= GitHub → 실행 서버 후보 인계 =================
-def export_runtime_candidates(output):
+def export_runtime_candidates(output, validated_release=False):
     """기존 최종 gate/packager를 사용한다. 서버 등록 승인이나 운영 설정은 만들지 않는다."""
     import hashlib,re
     import v3_strategy_research as research
@@ -8821,12 +8828,14 @@ def export_runtime_candidates(output):
     cv=governance.validate_constitution()
     if cv.get('ok') is not True:raise RuntimeError('RUNTIME_HANDOFF_CONSTITUTION_INVALID')
     rows=[];files={}
+    live_instances=((load(CONFIG,{}) if validated_release else {}).get('r4_runtime') or {}).get('strategy_instances') or {}
     for tf in research.TF_ORDER:
         excluded=set()
         while len(rows)<32:
             row=research._pipeline_local_shadow_choice(tf,excluded)
             if not row:break
             excluded.add(row['strategy_id'])
+            if any(isinstance(item,dict) and item.get('exact_strategy_version')==row.get('exact_strategy_version') and item.get('strategy_id')==row.get('strategy_id') and item.get('timeframe')==tf and item.get('server_activation_authorized') is True for item in live_instances.values()):continue
             source=source_for_pipeline(row)
             if source is None or hashlib.sha256(source.read_bytes()).hexdigest()!=row.get('source_sha256'):raise RuntimeError('RUNTIME_HANDOFF_SOURCE_HASH')
             version=str(row.get('exact_strategy_version') or '')
@@ -8841,6 +8850,42 @@ def export_runtime_candidates(output):
             files[name]={'bytes':len(raw),'sha256':packaged['runtime_sha256']}
             rows.append({'strategy_id':strategy,'timeframe':tf,'exact_strategy_version':version,'source_sha256':row['source_sha256'],'artifact':name,'runtime_sha256':packaged['runtime_sha256'],'research_evidence':row,'server_shadow_required':True,'approved_for_server_release':False})
     manifest={'schema':'B_BOT_R4_RESEARCH_CANDIDATES_V1','source_commit':os.environ.get('GITHUB_SHA'),'source_run_id':os.environ.get('GITHUB_RUN_ID'),'constitution_hash':cv['constitution_hash'],'engine_sha256':hashlib.sha256(RUNNER.read_bytes()).hexdigest() if 'RUNNER' in globals() else hashlib.sha256((LAB/'run_strategy.py').read_bytes()).hexdigest(),'candidates':rows,'files':files,'automatic_registration_authorized':False}
+    if validated_release:
+        import v3_auto_runtime_release as worker
+        import v3_runtime_config_merge as merger
+        required=load(RES/'collector_required_universe.json',{}).get('required_symbols') or []
+        for candidate in rows:candidate['required_symbols']=required
+        approval=load(worker.STATE,{})
+        if approval.get('status')=='VALIDATED_FOR_SERVER':
+            if not REQUEST.is_file() or not 0<=time.time()-float(approval.get('validated_at_epoch') or 0)<=180:raise RuntimeError('RUNTIME_RELEASE_APPROVAL_EXPIRED')
+            request_raw=REQUEST.read_bytes();req=json.loads(request_raw)
+            worker.validate_request(req)
+            if hashlib.sha256(request_raw).hexdigest()!=approval.get('request_sha256') or approval.get('canonical_verifiers')!=6:raise RuntimeError('RUNTIME_RELEASE_VERIFICATION_BINDING')
+            ids=req.get('strategy_instance_ids') or [req.get('strategy_instance_id')]
+            if req.get('version_kind')!='STRATEGY' or req.get('tier')!='CANARY' or len(ids)!=1 or not ids[0]:raise RuntimeError('RUNTIME_RELEASE_SINGLE_CANARY_REQUIRED')
+            matches=[row for row in rows if row['strategy_id']==req.get('strategy') and row['timeframe']==req.get('timeframe') and row['exact_strategy_version']==req.get('strategy_version')]
+            if len(matches)!=1:raise RuntimeError('RUNTIME_RELEASE_RESEARCH_BINDING')
+            candidate=matches[0]
+            if not minimal_shadow_pass(req['strategy_version'],ids[0]):raise RuntimeError('RUNTIME_RELEASE_SHADOW_NOT_PASSED')
+            active_raw=CONFIG.read_bytes()
+            if hashlib.sha256(active_raw).hexdigest()!=approval.get('base_config_sha256'):raise RuntimeError('RUNTIME_RELEASE_ACTIVE_CONFIG_CHANGED')
+            rel=str(req.get('strategy_config_file') or '').replace(chr(92),'/')
+            target=(ROOT/rel).resolve()
+            if not rel.startswith('strategy_lab/results/v3/strategy_config_pending_') or not target.is_relative_to(ROOT.resolve()) or not target.is_file():raise RuntimeError('RUNTIME_RELEASE_PENDING_PATH')
+            merged=merger.merge_strategy(json.loads(active_raw),load(target,{}),req['timeframe'],req['strategy'],req['strategy_version'],'CANARY',ids[0])
+            destination=str((merged.get('strategy_registry') or {}).get(req['strategy'],{}).get('file') or '')
+            if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,159}\.py',destination) or '..' in destination:raise RuntimeError('RUNTIME_RELEASE_DESTINATION')
+            # 동일 canonical packager 산출물만 설치한다. 연구 소스는 서버 payload에 포함하지 않는다.
+            runtime_path=ROOT/str(req.get('strategy_file') or '').replace(chr(92),'/')
+            if not runtime_path.resolve().is_relative_to(ROOT.resolve()) or not runtime_path.is_file():raise RuntimeError('RUNTIME_RELEASE_SOURCE_MISSING')
+            check=out/'release-source-check.py';packager.package_strategy(runtime_path,check)
+            if check.read_bytes()!=(out/candidate['artifact']).read_bytes():raise RuntimeError('RUNTIME_RELEASE_PACKAGED_SOURCE_MISMATCH')
+            check.unlink()
+            payloads={'release/CONFIG.json':json.dumps(merged,ensure_ascii=False,sort_keys=True,indent=2).encode(),'release/REQUEST.json':request_raw}
+            for name,data in payloads.items():
+                (out/name).parent.mkdir(parents=True,exist_ok=True);(out/name).write_bytes(data);files[name]={'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}
+            manifest['release']={'schema':'B_BOT_R4_VALIDATED_RELEASE_MANIFEST_V1','request_id':req['request_id'],'created_at_epoch':time.time(),'version_kind':'STRATEGY','tier':'CANARY','strategy_instance_ids':ids,'strategy':req['strategy'],'timeframe':req['timeframe'],'strategy_version':req['strategy_version'],'strategy_policy_bundle_version':req['strategy_policy_bundle_version'],'constitution_hash':cv['constitution_hash'],'base_config_sha256':approval['base_config_sha256'],'strategy_config_sha256':files['release/CONFIG.json']['sha256'],'request_sha256':files['release/REQUEST.json']['sha256'],'runtime_strategy_file':destination,'runtime_artifact':candidate['artifact'],'runtime_sha256':candidate['runtime_sha256'],'approved_for_server_release':True,'local_shadow_pass':True,'canonical_verifiers':6,'core_mutation':False}
+            manifest['automatic_registration_authorized']=True
     raw=json.dumps(manifest,ensure_ascii=False,sort_keys=True,indent=2).encode()
     if len(raw)>1024**2 or sum(item['bytes'] for item in files.values())>8*1024**2:raise RuntimeError('RUNTIME_HANDOFF_TOTAL_LIMIT')
     out.mkdir(parents=True,exist_ok=True);(out/'MANIFEST.json').write_bytes(raw)

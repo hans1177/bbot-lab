@@ -205,6 +205,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUNNER_DRY_RUN: '1'
         run: python "$BBOT_LOCAL_ROOT/strategy_lab/v3_auto_runtime_release.py" --pull-runtime-feedback
+      - name: Existing canonical shadow and release validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNNER_DRY_RUN: '1'
+        run: python "$BBOT_LOCAL_ROOT/strategy_lab/v3_auto_runtime_release.py" --cloud-validation
       - name: Prepare runtime candidate handoff
         if: steps.research.outcome == 'success'
         shell: python
@@ -213,7 +218,7 @@ jobs:
           from pathlib import Path
           sys.path.insert(0,str(Path(os.environ['BBOT_LOCAL_ROOT'])/'strategy_lab'))
           import v3_deployment
-          print(json.dumps(v3_deployment.export_runtime_candidates(Path(os.environ['RUNNER_TEMP'])/'runtime-candidates-out')))
+          print(json.dumps(v3_deployment.export_runtime_candidates(Path(os.environ['RUNNER_TEMP'])/'runtime-candidates-out',validated_release=True)))
       - name: Preserve research checkpoint
         id: checkpoint
         if: always() && steps.prepare.outcome == 'success' && steps.restore.outcome == 'success'

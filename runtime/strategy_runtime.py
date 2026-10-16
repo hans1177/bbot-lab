@@ -781,11 +781,11 @@ def receive_github_candidates():
         git('fetch','--depth=1','--no-tags','git@github.com:hans1177/bbot-lab.git','+refs/heads/runtime-candidates:refs/remotes/origin/runtime-candidates')
         revision=git('rev-parse','refs/remotes/origin/runtime-candidates').decode().strip()
         if not re.fullmatch('[0-9a-f]{40}',revision):raise RuntimeError('GITHUB_RECEIVER_REF_INVALID')
-        if (not settings.get('feedback_enabled') or 'feedback_candidates' in previous) and previous.get('contract')==[settings.get('constitution_hash'),settings.get('engine_sha256')] and previous.get('received_commit')==revision and previous.get('status') in {'WAIT_FINAL_RESEARCH','WAIT_SERVER_VALIDATION'}:
+        if (not settings.get('automatic_registration_enabled') or previous.get('status') in {'APPLIED','APPLIED_DUPLICATE','WAIT_FINAL_RESEARCH'}) and (not settings.get('feedback_enabled') or 'feedback_candidates' in previous) and previous.get('contract')==[settings.get('constitution_hash'),settings.get('engine_sha256')] and previous.get('received_commit')==revision and previous.get('status') in {'WAIT_FINAL_RESEARCH','WAIT_SERVER_VALIDATION','APPLIED','APPLIED_DUPLICATE'}:
             feedback=publish_github_feedback(previous.get('feedback_candidates') or [],revision) if settings.get('feedback_enabled') is True else {'status':'DISABLED'}
-            return {**previous,'unchanged':True,'feedback':feedback}
+            return {**previous,'unchanged':True,'automatic_registration_enabled':settings.get('automatic_registration_enabled') is True,'operating_config_changed':False,'feedback':feedback}
         names=git('ls-tree','-r','--name-only',revision).decode().splitlines()
-        if 'MANIFEST.json' not in names or len(names)>33:raise RuntimeError('GITHUB_RECEIVER_TREE_INVALID')
+        if 'MANIFEST.json' not in names or len(names)>35:raise RuntimeError('GITHUB_RECEIVER_TREE_INVALID')
         def blob(name,limit):
             size=int(git('cat-file','-s',revision+':'+name).decode())
             if size<0 or size>limit:raise RuntimeError('GITHUB_RECEIVER_BLOB_LIMIT')
@@ -793,7 +793,7 @@ def receive_github_candidates():
             if len(raw)!=size:raise RuntimeError('GITHUB_RECEIVER_BLOB_SIZE')
             return raw
         manifest=json.loads(blob('MANIFEST.json',1024**2))
-        if manifest.get('schema')!='B_BOT_R4_RESEARCH_CANDIDATES_V1' or manifest.get('automatic_registration_authorized') is not False:raise RuntimeError('GITHUB_RECEIVER_MANIFEST_INVALID')
+        if manifest.get('schema')!='B_BOT_R4_RESEARCH_CANDIDATES_V1' or not isinstance(manifest.get('automatic_registration_authorized'),bool):raise RuntimeError('GITHUB_RECEIVER_MANIFEST_INVALID')
         if manifest.get('constitution_hash')!=settings.get('constitution_hash') or manifest.get('engine_sha256')!=settings.get('engine_sha256'):raise RuntimeError('GITHUB_RECEIVER_CONTRACT_MISMATCH')
         if not re.fullmatch('[0-9a-f]{40}',str(manifest.get('source_commit') or '')):raise RuntimeError('GITHUB_RECEIVER_CODE_REF_INVALID')
         rows=manifest.get('candidates');files=manifest.get('files')
@@ -822,6 +822,26 @@ def receive_github_candidates():
             if target.is_symlink():raise RuntimeError('GITHUB_RECEIVER_TARGET_SYMLINK')
             if target.exists() and (not (target/'runtime.py').is_file() or hashlib.sha256((target/'runtime.py').read_bytes()).hexdigest()!=digest):raise RuntimeError('GITHUB_RECEIVER_IMMUTABLE_VERSION_CONFLICT')
             pending.append((candidate_id,target,raw,row))
+        release=manifest.get('release')
+        release_config=None;release_request=None
+        if release is not None:
+            if not isinstance(release,dict) or manifest.get('automatic_registration_authorized') is not True:raise RuntimeError('GITHUB_RELEASE_AUTHORIZATION_INVALID')
+            if release.get('schema')!='B_BOT_R4_VALIDATED_RELEASE_MANIFEST_V1' or release.get('approved_for_server_release') is not True or release.get('local_shadow_pass') is not True or release.get('core_mutation') is not False or release.get('canonical_verifiers')!=6 or release.get('tier')!='CANARY' or release.get('version_kind')!='STRATEGY':raise RuntimeError('GITHUB_RELEASE_CANONICAL_GATES_REQUIRED')
+            if release.get('constitution_hash')!=settings.get('constitution_hash'):raise RuntimeError('GITHUB_RELEASE_CONSTITUTION_MISMATCH')
+            for name,key in [('release/CONFIG.json','strategy_config_sha256'),('release/REQUEST.json','request_sha256')]:
+                raw=blob(name,1024**2)
+                if name not in files or hashlib.sha256(raw).hexdigest()!=files[name].get('sha256') or len(raw)!=files[name].get('bytes') or files[name]['sha256']!=release.get(key):raise RuntimeError('GITHUB_RELEASE_PAYLOAD_HASH')
+                paths.add(name)
+                if name.endswith('CONFIG.json'):release_config=raw
+                else:release_request=json.loads(raw)
+            if release_request.get('schema')!='B_BOT_V3_RUNTIME_SYNC_REQUEST_V1' or release_request.get('autonomous_rule_passed') is not True or release_request.get('core_mutation') is not False:raise RuntimeError('GITHUB_RELEASE_REQUEST_GATE')
+            for key in ('request_id','timeframe','strategy','strategy_version','strategy_policy_bundle_version','tier','version_kind','constitution_hash'):
+                if release_request.get(key)!=release.get(key):raise RuntimeError('GITHUB_RELEASE_REQUEST_BINDING:'+key)
+            ids=release_request.get('strategy_instance_ids') or [release_request.get('strategy_instance_id')]
+            if len(ids)!=1 or not ids[0] or ids!=release.get('strategy_instance_ids'):raise RuntimeError('GITHUB_RELEASE_INSTANCE_BINDING')
+            matched=[entry for entry in pending if entry[3]['strategy_id']==release['strategy'] and entry[3]['timeframe']==release['timeframe'] and entry[3]['exact_strategy_version']==release['strategy_version'] and entry[3]['artifact']==release.get('runtime_artifact') and entry[3]['runtime_sha256']==release.get('runtime_sha256')]
+            if len(matched)!=1:raise RuntimeError('GITHUB_RELEASE_RESEARCH_BINDING')
+        elif manifest.get('automatic_registration_authorized') is not False:raise RuntimeError('GITHUB_RELEASE_APPROVAL_MISSING')
         if paths!=set(files):raise RuntimeError('GITHUB_RECEIVER_UNBOUND_ARTIFACT')
         inbox.mkdir(parents=True,exist_ok=True)
         for candidate_id,target,raw,row in pending:
@@ -838,11 +858,92 @@ def receive_github_candidates():
         stale=sorted((path for path in inbox.iterdir() if path.is_dir() and not path.is_symlink() and path.name not in keep),key=lambda path:path.stat().st_mtime,reverse=True)
         for path in stale[max(0,64-len(keep)):]:shutil.rmtree(path)
         git('reflog','expire','--expire=now','--all');git('gc','--prune=now')
-        result={'schema':'B_BOT_R4_GITHUB_RECEIVER_STATE_V1','status':'WAIT_SERVER_VALIDATION' if pending else 'WAIT_FINAL_RESEARCH','contract':[settings.get('constitution_hash'),settings.get('engine_sha256')],'received_commit':revision,'source_commit':manifest['source_commit'],'feedback_candidates':[{'timeframe':row['timeframe'],'required_symbols':row.get('required_symbols') or []} for row in rows],'candidate_ids':sorted(keep),'received_candidates':len(pending),'updated_at':int(time.time()),'automatic_registration_enabled':False,'orders_touched':False}
+        apply_status='WAIT_SERVER_VALIDATION' if pending else 'WAIT_FINAL_RESEARCH'
+        config_changed=False
+        if release is not None and settings.get('automatic_registration_enabled') is True:
+            if not 0<=time.time()-float(release.get('created_at_epoch') or 0)<=600:
+                apply_status='WAIT_RELEASE_REVALIDATION'
+            elif (BASE/'SERVER_PUSH_HOLD.flag').exists():
+                apply_status='WAIT_SERVER_HOLD'
+            else:
+                import tempfile
+                lock_path=Path('/tmp/bbot_source_sync.lock')
+                if lock_path.is_symlink():raise RuntimeError('GITHUB_RELEASE_LOCK_SYMLINK')
+                with lock_path.open('a+b') as release_lock:
+                    try:fcntl.flock(release_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                    except BlockingIOError:raise RuntimeError('GITHUB_RELEASE_MAINTENANCE_BUSY')
+                    config_path=BASE/'strategy_config.json';last=state/'r4_release_last_applied.json'
+                    if config_path.is_symlink() or last.is_symlink():raise RuntimeError('GITHUB_RELEASE_CONFIG_SYMLINK')
+                    current=config_path.read_bytes();config_sha=hashlib.sha256(current).hexdigest()
+                    old_last=last.read_bytes() if last.exists() else None
+                    previous_release=json.loads(old_last) if old_last else {}
+                    if previous_release.get('request_id')==release['request_id']:
+                        apply_status='APPLIED_DUPLICATE'
+                    elif config_sha!=release.get('base_config_sha256'):
+                        apply_status='WAIT_LIVE_CONFIG_CHANGED'
+                    else:
+                        frozen={'runner.py':'4926850cabce4d2659d6863032ac9630aaf30c9e074483cc5f38457ab35bc160','order.py':'513e85ab9935e8ea107f5f26dcb359f382c8deddc63c90d8bcf80348e45ec86c','risk_engine.py':'768aaa01735b82ef2705a186f244fbe3064954888d53f3546b09d05d49280fa6','candidate.py':'b33cb689602f9dd2c1287ce6ce78c175fb38b4f7c90d9d5d695a34e721d423ac'}
+                        if any((BASE/name).is_symlink() or hashlib.sha256((BASE/name).read_bytes()).hexdigest()!=digest for name,digest in frozen.items()):raise RuntimeError('GITHUB_RELEASE_FROZEN_CORE_CHANGED')
+                        old=json.loads(current);new=json.loads(release_config);iid=release['strategy_instance_ids'][0];strategy=release['strategy'];tf=release['timeframe']
+                        if not isinstance(new,dict) or new.get('frames')!=old.get('frames'):raise RuntimeError('GITHUB_RELEASE_FRAME_OWNER_CHANGE_FORBIDDEN')
+                        if {k:v for k,v in new.items() if k not in {'strategy_registry','r4_runtime'}}!={k:v for k,v in old.items() if k not in {'strategy_registry','r4_runtime'}}:raise RuntimeError('GITHUB_RELEASE_UNRELATED_CONFIG_CHANGED')
+                        old_runtime=old.get('r4_runtime') or {};new_runtime=new.get('r4_runtime') or {}
+                        if {k:v for k,v in new_runtime.items() if k!='strategy_instances'}!={k:v for k,v in old_runtime.items() if k!='strategy_instances'}:raise RuntimeError('GITHUB_RELEASE_RUNTIME_POLICY_CHANGED')
+                        old_rows=old_runtime.get('strategy_instances') or {};new_rows=new_runtime.get('strategy_instances') or {}
+                        if iid in old_rows or set(new_rows)!=set(old_rows)|{iid}:raise RuntimeError('GITHUB_RELEASE_NEW_INSTANCE_REQUIRED')
+                        for key,value in old_rows.items():
+                            expected=json.loads(json.dumps(value))
+                            if isinstance(expected,dict) and str(expected.get('strategy_id') or '').upper()==strategy and str(expected.get('timeframe') or '').upper()==tf and expected.get('entry_enabled',expected.get('enabled',False)) is True:
+                                expected['entry_enabled']=False;expected['superseded_by_strategy_instance_id']=iid
+                            if new_rows.get(key)!=expected:raise RuntimeError('GITHUB_RELEASE_EXISTING_INSTANCE_CHANGED')
+                        if sum(isinstance(item,dict) and item.get('enabled') is True and item.get('entry_enabled',False) is True and str(item.get('timeframe') or '').upper()==tf and item.get('server_activation_authorized') is True for item in new_rows.values())>2:raise RuntimeError('GITHUB_RELEASE_FRAME_STRATEGY_CAP')
+                        row=new_rows[iid]
+                        if row.get('strategy_instance_id')!=iid or row.get('strategy_id')!=strategy or row.get('timeframe')!=tf or row.get('exact_strategy_version')!=release['strategy_version'] or row.get('strategy_policy_bundle_version')!=release['strategy_policy_bundle_version']:raise RuntimeError('GITHUB_RELEASE_RUNTIME_BINDING')
+                        if row.get('tier')!='CANARY' or row.get('qualification')!='CANARY' or any(row.get(key) is not True for key in ('enabled','entry_enabled','server_activation_authorized','approved_for_server_release')) or not isinstance(row.get('policy_snapshot'),dict) or not row['policy_snapshot'] or float(row.get('capital_weight') or 0)!=0.20:raise RuntimeError('GITHUB_RELEASE_CANARY_CONTRACT')
+                        old_registry=old.get('strategy_registry') or {};new_registry=new.get('strategy_registry') or {}
+                        if {k:v for k,v in new_registry.items() if k!=strategy}!={k:v for k,v in old_registry.items() if k!=strategy}:raise RuntimeError('GITHUB_RELEASE_UNRELATED_REGISTRY_CHANGED')
+                        destination=str(release.get('runtime_strategy_file') or '')
+                        if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,159}\.py',destination) or '..' in destination or (new_registry.get(strategy) or {}).get('file')!=destination:raise RuntimeError('GITHUB_RELEASE_DESTINATION_INVALID')
+                        directory=BASE/'assist/strategies';artifact=directory/destination
+                        if directory.is_symlink() or artifact.is_symlink():raise RuntimeError('GITHUB_RELEASE_ARTIFACT_SYMLINK')
+                        old_artifact=artifact.read_bytes() if artifact.exists() else None
+                        runtime_raw=matched[0][2]
+                        if old_artifact is not None and old_artifact!=runtime_raw:raise RuntimeError('GITHUB_RELEASE_EXISTING_ARTIFACT_IMMUTABLE')
+                        legacy=subprocess.run(['systemctl','is-active','--quiet','runner.service'],capture_output=True,timeout=10)
+                        service=subprocess.run(['systemctl','show','r4-runtime.service','-p','MainPID','--value'],capture_output=True,text=True,check=True,timeout=10).stdout.strip()
+                        if legacy.returncode==0 or not service or service=='0':raise RuntimeError('GITHUB_RELEASE_SERVICE_NOT_SAFE')
+                        backup=state/'github_release_backup'
+                        if backup.is_symlink():raise RuntimeError('GITHUB_RELEASE_BACKUP_SYMLINK')
+                        backup.mkdir(exist_ok=True)
+                        (backup/'strategy_config.json').write_bytes(current)
+                        (backup/'manifest.json').write_text(json.dumps({'request_id':release['request_id'],'base_config_sha256':config_sha,'destination':destination,'artifact_existed':old_artifact is not None},sort_keys=True))
+                        (backup/'artifact.py').write_bytes(old_artifact or b'')
+                        (backup/'last_applied.json').write_bytes(old_last or b'')
+                        directory.mkdir(parents=True,exist_ok=True)
+                        with tempfile.TemporaryDirectory(prefix='github-release-',dir=str(state)) as folder:
+                            stage=Path(folder)
+                            if hashlib.sha256(config_path.read_bytes()).hexdigest()!=config_sha:raise RuntimeError('GITHUB_RELEASE_LIVE_CONFIG_CHANGED_DURING_VALIDATION')
+                            try:
+                                (stage/'artifact.py').write_bytes(runtime_raw);os.replace(stage/'artifact.py',artifact)
+                                (stage/'config.json').write_bytes(release_config);os.chmod(stage/'config.json',config_path.stat().st_mode & 0o777);os.replace(stage/'config.json',config_path)
+                                time.sleep(3)
+                                after=subprocess.run(['systemctl','show','r4-runtime.service','-p','MainPID','--value'],capture_output=True,text=True,check=True,timeout=10).stdout.strip()
+                                if after!=service or subprocess.run(['systemctl','is-active','--quiet','r4-runtime.service'],capture_output=True,timeout=10).returncode:raise RuntimeError('GITHUB_RELEASE_SERVICE_CHANGED')
+                                (stage/'last.json').write_text(json.dumps(release,sort_keys=True));os.replace(stage/'last.json',last)
+                                config_changed=True;apply_status='APPLIED'
+                            except Exception:
+                                (stage/'restore.json').write_bytes(current);os.replace(stage/'restore.json',config_path)
+                                if old_artifact is None:artifact.unlink(missing_ok=True)
+                                else:(stage/'old.py').write_bytes(old_artifact);os.replace(stage/'old.py',artifact)
+                                if old_last is None:last.unlink(missing_ok=True)
+                                else:(stage/'last-old.json').write_bytes(old_last);os.replace(stage/'last-old.json',last)
+                                raise
+        result={'schema':'B_BOT_R4_GITHUB_RECEIVER_STATE_V1','status':apply_status,'contract':[settings.get('constitution_hash'),settings.get('engine_sha256')],'received_commit':revision,'source_commit':manifest['source_commit'],'feedback_candidates':[{'timeframe':row['timeframe'],'required_symbols':row.get('required_symbols') or []} for row in rows],'candidate_ids':sorted(keep),'received_candidates':len(pending),'updated_at':int(time.time()),'automatic_registration_enabled':settings.get('automatic_registration_enabled') is True,'operating_config_changed':config_changed,'orders_touched':False}
         temporary=status_path.with_name(status_path.name+'.'+str(os.getpid())+'.tmp');temporary.write_text(json.dumps(result,sort_keys=True),encoding='utf-8');os.replace(temporary,status_path)
         # 동일 head는 위에서 반환하여 반복 성공 로그를 만들지 않는다.
         log=BASE/'logs/runner.log';log.parent.mkdir(parents=True,exist_ok=True)
-        with log.open('a',encoding='utf-8') as output:output.write('[주문][R4][GITHUB_RECEIVE] '+json.dumps(result,sort_keys=True)+'\n')
+        if previous.get('received_commit')!=revision or previous.get('status')!=result['status']:
+            with log.open('a',encoding='utf-8') as output:output.write('[주문][R4][GITHUB_RECEIVE] '+json.dumps(result,sort_keys=True)+'\n')
         if settings.get('feedback_enabled') is True:result['feedback']=publish_github_feedback(rows,revision)
         return result
     finally:
