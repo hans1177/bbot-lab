@@ -16,7 +16,7 @@ class ServerConnectionTests(unittest.TestCase):
             self.calls.append((command,kwargs.get('input')))
             if command[0]=='ssh':
                 source=kwargs['input'];compile(source,'server_source','exec')
-                if 'ssh-keygen' in source:value={'public_key':'ssh-ed25519 '+base64.b64encode(b'public fixture').decode()}
+                if 'ssh-keygen' in source:value={'public_key':'ssh-ed25519 '+base64.b64encode(b'public fixture').decode()+' bbot-lab-read'}
                 else:value={'service':self.service,'files':files}
             else:
                 path=command[2].removeprefix('repos/hans1177/bbot-lab');data=json.loads(kwargs['input']) if kwargs.get('input') else None

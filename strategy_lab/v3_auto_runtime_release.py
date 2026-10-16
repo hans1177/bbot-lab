@@ -3021,7 +3021,7 @@ if fingerprint!='SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU':raise Runti
 host.write_text('github.com ssh-ed25519 '+public_host+chr(10),encoding='ascii');os.chmod(host,0o600)
 print(json.dumps({'public_key':public,'github_host_fingerprint':fingerprint,'git_ready':bool(shutil.which('git'))}))
 ''')
-    public=str(auth.get('public_key') or '')
+    public=' '.join(str(auth.get('public_key') or '').split()[:2])
     if not re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/=]+',public):raise RuntimeError('AWS_PUBLIC_KEY_INVALID')
     existing=github('/keys?per_page=100')
     found=next((row for row in existing if ' '.join(str(row.get('key') or '').split()[:2])==public),None)
