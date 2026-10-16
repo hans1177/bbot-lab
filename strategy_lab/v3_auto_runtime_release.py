@@ -2975,7 +2975,7 @@ def connect_github(code_ref):
             elif HOLD.exists():HOLD.unlink()
         subprocess.Popen(worker,cwd=str(ROOT),creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         raise
-    stop_research=stop_script.replace('v3_auto_runtime_release\\.py','local_continuous_research\\.py|roadmap_manager\\.py')
+    stop_research=stop_script.replace(r'v3_auto_runtime_release\.py',r'local_continuous_research\.py|roadmap_manager\.py')
     subprocess.run(['powershell.exe','-NoProfile','-Command',stop_research],capture_output=True,text=True,timeout=30)
     subprocess.Popen(worker,cwd=str(ROOT),creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
     print(json.dumps({'connection':'CONFIGURED','github_research':result,'local_research_enabled':False,'existing_release_worker_started':True,'server_write':False,'real_order':False},ensure_ascii=True))

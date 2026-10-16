@@ -33,6 +33,8 @@ class GithubConnectionTests(unittest.TestCase):
         self.assertIn('return 17',self.dep.read_text());self.assertEqual(self.controller.read_text().count('GITHUB_RESEARCH_OWNER'),4)
         stop=next(e[1] for e in self.events if isinstance(e,tuple));self.assertNotIn('research_controller',stop);self.assertNotIn('run_strategy',stop)
         self.assertEqual(self.events[-1],'START');self.assertFalse(self.request.exists())
+        scripts=[e[1] for e in self.events if isinstance(e,tuple)]
+        self.assertEqual(len(scripts),2);self.assertIn('local_continuous_research',scripts[1]);self.assertNotIn('v3_auto_runtime_release',scripts[1])
     def test_connection_failure_restores_all_original_files(self):
         self.fail=True;self.hold.write_text('ROADMAP_RESEARCH_V1|old')
         with self.assertRaisesRegex(RuntimeError,'READ_FAILED'):self.call()
