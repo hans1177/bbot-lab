@@ -1,0 +1,1025 @@
+{
+  "account_mode": {
+    "balanced_from_krw": 100000000,
+    "balanced_to_growth_below_krw": 90000000,
+    "continuous_risk_posture": true,
+    "defensive_continues_more_conservative_above_500m": true,
+    "defensive_from_krw": 500000000,
+    "defensive_to_balanced_below_krw": 450000000,
+    "enabled": true,
+    "equity_window_hours": 24,
+    "external_crypto_exchange_fx": false,
+    "fx_required_for_new_entry": false,
+    "fx_source": "LOCAL_CONFIG_OR_ENV",
+    "growth_below_krw": 100000000,
+    "growth_no_extra_account_size_haircut": true,
+    "hard_numeric_risk_threshold_invention": false,
+    "high_equity_reference_is_new_mode": false,
+    "high_equity_reference_krw": 1000000000,
+    "krw_per_usdt": 0.0,
+    "risk_budget_policy": "MODE_CHANGES_CAPITAL_RISK_BUDGET_ONLY_LIQUIDATION_HARD_RULE_SHARED",
+    "uncertain_policy": "BLOCK_NEW_ENTRY"
+  },
+  "auto_promotion": {
+    "approval": "RULE_BASED_AUTONOMOUS",
+    "enabled": true,
+    "full_scale_direct": false
+  },
+  "control_sl": {
+    "apply_to_existing_positions": true,
+    "enabled": true,
+    "mode": "STANDARD"
+  },
+  "core_symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "XRPUSDT"
+  ],
+  "deployment": {
+    "auto_scale_path": [
+      "CANARY",
+      "SMALL",
+      "NORMAL"
+    ],
+    "canary_weight": 0.2,
+    "canary_weight_policy": "SAFETY_BOOTSTRAP_20PCT_AT_1X_NOT_RESEARCH_OPTIMUM",
+    "direct_full_scale": false,
+    "evidence_sufficiency": "STATISTICAL_CONFIDENCE_NOT_FIXED_TRADE_COUNT_OR_DAYS",
+    "normal_weight": 1.0,
+    "policy_canary_requires_validated_version": true,
+    "promotion_performance_rule": "REAL_ROI_95CI_LOWER_GT_0_AND_TOTAL_PNL_POSITIVE_AND_NO_HARD_FAIL",
+    "provisional_leverage": 1,
+    "provisional_leverage_policy": "SAFETY_BOOTSTRAP_UNTIL_LEVERAGE_RESEARCH",
+    "provisional_main_requires_real_canary": true,
+    "rollback_rule": "HARD_FAIL_OR_REAL_ROI_95CI_UPPER_LT_0",
+    "rollback_target": "PREVIOUS_VALIDATED_VERSION",
+    "shadow_optional": true,
+    "shadow_required": false,
+    "small_weight": 0.5,
+    "small_weight_policy": "USER_SELECTED_50PCT_NOT_RESEARCH_OPTIMUM"
+  },
+  "entry_gate": {
+    "enabled": true,
+    "mode": "STANDARD"
+  },
+  "frames": {
+    "12H": {
+      "capital_weight": 0.2,
+      "deployment_tier": "CANARY",
+      "enabled": true,
+      "legacy_manage_existing": true,
+      "leverage": 10,
+      "status": "PROVISIONAL_MAIN",
+      "strategies": [
+        "EMA_CROSS",
+        "SAR"
+      ],
+      "strategy_version": "SV_12H_STANDARD_EMA_CROSS_SAR_V1"
+    },
+    "1D": {
+      "capital_weight": 0.2,
+      "deployment_tier": "CANARY",
+      "enabled": true,
+      "legacy_manage_existing": true,
+      "leverage": 10,
+      "state_reentry_allowed": true,
+      "status": "PROVISIONAL_MAIN",
+      "strategies": [
+        "V3_COMBO_MOMENTUM_ACCEL_ADAPTIVE_CHANNEL_1D_V1"
+      ],
+      "strategy_version": "SV_STRATEGY_c3dfbb6d68e4"
+    },
+    "1H": {
+      "capital_weight": 0.2,
+      "deployment_tier": "CANARY",
+      "enabled": true,
+      "legacy_manage_existing": false,
+      "leverage": 10,
+      "state_reentry_allowed": true,
+      "status": "PROVISIONAL_MAIN",
+      "strategies": [
+        "V3_COMBO_DIRECTIONAL_ENTROPY_EFFICIENCY_PULLBACK_RESUME_1H_V1"
+      ],
+      "strategy_version": "SV_STRATEGY_5e752e5dc7ab"
+    },
+    "1M": {
+      "deployment_tier": "OFF",
+      "direct_entry": false,
+      "enabled": false,
+      "leverage": 0,
+      "status": "REFERENCE_ONLY",
+      "strategies": [
+        "OBV"
+      ],
+      "strategy_version": "SV_1M_REFERENCE_OBV_V1"
+    },
+    "1W": {
+      "deployment_tier": "OFF",
+      "enabled": false,
+      "legacy_manage_existing": false,
+      "leverage": 10,
+      "status": "RESEARCH",
+      "strategies": [],
+      "strategy_version": "SV_1W_RESEARCH_PENDING_V1"
+    },
+    "30M": {
+      "capital_weight": 0.2,
+      "deployment_tier": "CANARY",
+      "direct_entry": false,
+      "enabled": true,
+      "immediate_live_enable": false,
+      "legacy_manage_existing": false,
+      "leverage": 10,
+      "qualification_path": [
+        "DATA_CONTRACT",
+        "STRATEGY_RESEARCH",
+        "EXACT_VERSION",
+        "PASSPORT_REGISTRY",
+        "LOCAL_TEST",
+        "LOCAL_SHADOW",
+        "CANARY",
+        "SMALL",
+        "NORMAL"
+      ],
+      "state_reentry_allowed": true,
+      "status": "PROVISIONAL_MAIN",
+      "strategies": [
+        "V3_DIRECTIONAL_ENTROPY"
+      ],
+      "strategy_version": "SV_STRATEGY_0058e16eb2cc"
+    },
+    "6H": {
+      "capital_weight": 0.2,
+      "deployment_tier": "CANARY",
+      "enabled": true,
+      "legacy_manage_existing": false,
+      "leverage": 10,
+      "state_reentry_allowed": true,
+      "status": "PROVISIONAL_MAIN",
+      "strategies": [
+        "V3_COMBO_EFFICIENCY_TREND_RANGE_EXPANSION_6H_V1"
+      ],
+      "strategy_version": "SV_STRATEGY_faedafa0a140"
+    }
+  },
+  "leverage_policy": {
+    "absolute_max": 30,
+    "exchange_cap_mode": "USE_LOWER_VALUE",
+    "min": 20,
+    "server_dynamic_leverage": false,
+    "source": "RESEARCH_APPROVED_ONLY"
+  },
+  "opposite_exit": {
+    "dynamic_policy": false,
+    "enabled": true,
+    "mode": "STANDARD_COMBINED"
+  },
+  "opposite_reopen": {
+    "dynamic_policy": false,
+    "enabled": true,
+    "mode": "NEXT_1H_STATE"
+  },
+  "policy_versions": {
+    "DIRECTION": "PV_DIRECTION_BASELINE_V1",
+    "ENTRY_RISK": "PV_ENTRY_RISK_BASELINE_V1",
+    "EXECUTION": "PV_EXECUTION_STANDARD_V1",
+    "EXIT": "PV_EXIT_FIXED_TRAILING_STANDARD_V1",
+    "PORTFOLIO": "PV_PORTFOLIO_MARGIN_RESERVE_V1",
+    "REENTRY": "PV_REENTRY_CURRENT_STATE_V1",
+    "REGIME": "PV_REGIME_REFERENCE_ONLY_V1",
+    "SYMBOL": "PV_SYMBOL_EXPECTED_CONTRIBUTION_V1"
+  },
+  "position_management": {
+    "apply_current_config_to_existing_positions": false,
+    "owner_fallback_priority": [
+      "12H",
+      "1D",
+      "6H",
+      "1H",
+      "30M",
+      "1W"
+    ],
+    "preserve_entry_facts": true,
+    "preserve_entry_owner": true
+  },
+  "r4_runtime": {
+    "activation": "READY_FOR_VALIDATED_CUTOVER",
+    "adaptive_capital_multiplier_policy": {
+      "base_tier_weights": {
+        "CANARY": 0.2,
+        "NORMAL": 1.0,
+        "SMALL": 0.5
+      },
+      "default": {
+        "CANARY": 1.3,
+        "NORMAL": 2.0,
+        "SMALL": 1.6
+      },
+      "enabled": true,
+      "hard_max": {
+        "CANARY": 1.5,
+        "NORMAL": 2.5,
+        "SMALL": 2.0
+      },
+      "levels": {
+        "CANARY": {
+          "default": 1.3,
+          "hard_max": 1.5,
+          "strong": 1.4
+        },
+        "NORMAL": {
+          "default": 2.0,
+          "hard_max": 2.5,
+          "strong": 2.25
+        },
+        "SMALL": {
+          "default": 1.6,
+          "hard_max": 2.0,
+          "strong": 1.8
+        }
+      },
+      "portfolio_and_risk_gates_authoritative": true,
+      "separate_from_exchange_leverage": true
+    },
+    "allow_opposite_side_same_symbol": false,
+    "capacity_policy": {
+      "limit_semantics": "RECONCILED_OWNED_UNITS_PLUS_CURRENT_RISK_APPROVED_INCREMENT",
+      "mode": "LIVE_RISK_APPROVED_INCREMENT",
+      "static_symbol_map": false,
+      "unit": "EXCHANGE_LOT_SIZE_STEP_INTEGER_UNITS",
+      "universe_source": "CURRENT_ACTIVE_CONFIG"
+    },
+    "capacity_units": {},
+    "common_leverage_policy": {
+      "approved_sources": {
+        "12H": 10,
+        "1D": 15
+      },
+      "effective_live_exchange_leverage_x": 30,
+      "eligible_live_timeframes": [
+        "30M",
+        "1H",
+        "6H",
+        "12H",
+        "1D",
+        "1W"
+      ],
+      "mode": "MIN_RESEARCH_APPROVED_BASELINE",
+      "open_basket_change": "DEFER_UNTIL_FLAT",
+      "owner_leverage_increment_x": 20,
+      "reference_only_timeframes": [
+        "1M"
+      ],
+      "source": "R5A_LEVERAGE_FROZEN_STANDARD_V2",
+      "strategy_or_tier_may_change_exchange_leverage": false,
+      "symbol_scope": "DYNAMIC_UNIVERSE",
+      "target": 10,
+      "timeframe_specific_live_leverage": false
+    },
+    "cutover": {
+      "forced_exit_forbidden": true,
+      "full_pipeline_ready": true,
+      "legacy_adoption_approvals": {
+        "ADAUSDT_SELL_1788220991_3912a859db": {
+          "approved": true,
+          "owner_evidence_sha256": "5ad56a25c6037b7ef4333c4195a2a90ad620bc040e4cb346b5805fbc8be3adb6",
+          "strategy_instance_id": "SI_389b917fae9d4fb2a6f7fb0d8b4cc1f6"
+        },
+        "ARBUSDT_BUY_1788224411_1bc29a704a": {
+          "approved": true,
+          "owner_evidence_sha256": "4e191caf4d219d8068d44d9caf48be338713c25ed2a3503fb6be0bda10f38707",
+          "strategy_instance_id": "SI_0b64c44f909547953cf31c4878ef7d26"
+        },
+        "AXSUSDT_SELL_1788173919_3c9b65275b": {
+          "approved": true,
+          "owner_evidence_sha256": "2c420a308fa8eccae0a298611abd7b59ce8894d8fa45e3ee6b90775a1aeb1e0f",
+          "strategy_instance_id": "SI_389b917fae9d4fb2a6f7fb0d8b4cc1f6"
+        },
+        "SUIUSDT_SELL_1788199628_8ac8791e9f": {
+          "approved": true,
+          "owner_evidence_sha256": "5474c1744eb7ea9ee0037ae5569fd9f91abc55cb0642af004e5b0b3e0f6e3ec8",
+          "strategy_instance_id": "SI_389b917fae9d4fb2a6f7fb0d8b4cc1f6"
+        },
+        "TRXUSDT_SELL_1788221055_a037b25d56": {
+          "approved": true,
+          "owner_evidence_sha256": "8f461891692a533ccffdf38f2afbed303989213b302d75200c32543d5483ba21",
+          "strategy_instance_id": "SI_389b917fae9d4fb2a6f7fb0d8b4cc1f6"
+        },
+        "XLMUSDT_SELL_1788307279_345f14f257": {
+          "approved": true,
+          "owner_evidence_sha256": "5c4c01cad9edbb979150164225b051a8141fe76656fc6d2d7bdfce3c6d644ed3",
+          "strategy_instance_id": "SI_389b917fae9d4fb2a6f7fb0d8b4cc1f6"
+        }
+      },
+      "legacy_barrier_timeout_sec": 120,
+      "legacy_new_admission_hold": {
+        "enabled": true,
+        "mode": "SERVER_CONFIG_SYMBOLS_EMPTY_IMMUTABLE"
+      },
+      "legacy_restart_after_adoption_forbidden": true,
+      "legacy_service_name": "runner.service",
+      "new_entry_after_reconcile_only": true,
+      "r4_service_name": "r4-runtime.service",
+      "require_exact_owner_evidence": true,
+      "require_exact_qty_reconciliation": true,
+      "require_exact_side": true,
+      "require_no_pending_ambiguous_order": true,
+      "require_policy_snapshot": true,
+      "startup_reconcile_timeout_sec": 90
+    },
+    "exclusive_single_writer": true,
+    "legacy_runner_must_be_stopped": true,
+    "reconcile_before_entry": true,
+    "strategy_instances": {
+      "SI_0b64c44f909547953cf31c4878ef7d26": {
+        "approved_for_server_release": true,
+        "capital_weight": 0.2,
+        "enabled": true,
+        "entry_blocked": false,
+        "entry_enabled": true,
+        "exact_strategy_version": "SV_STRATEGY_faedafa0a140",
+        "policy_snapshot": {
+          "opposite_exit": {
+            "dynamic_policy": false,
+            "enabled": true,
+            "mode": "STANDARD_COMBINED"
+          },
+          "opposite_reopen": {
+            "dynamic_policy": false,
+            "enabled": true,
+            "mode": "NEXT_1H_STATE"
+          },
+          "policy_versions": {
+            "DIRECTION": "PV_DIRECTION_BASELINE_V1",
+            "ENTRY_RISK": "PV_ENTRY_RISK_BASELINE_V1",
+            "EXECUTION": "PV_EXECUTION_STANDARD_V1",
+            "EXIT": "PV_EXIT_FIXED_TRAILING_STANDARD_V1",
+            "PORTFOLIO": "PV_PORTFOLIO_MARGIN_RESERVE_V1",
+            "REENTRY": "PV_REENTRY_CURRENT_STATE_V1",
+            "REGIME": "PV_REGIME_REFERENCE_ONLY_V1",
+            "SYMBOL": "PV_SYMBOL_EXPECTED_CONTRIBUTION_V1"
+          },
+          "state_reentry": {
+            "dynamic_policy": false,
+            "enabled": true,
+            "mode": "CURRENT_STATE",
+            "next_check_tf": "1H"
+          },
+          "trailing": {
+            "apply_to_existing_positions": true,
+            "callback_pct": 1.5,
+            "dynamic_adjustment": false,
+            "enabled": true,
+            "mode": "FIXED_BASELINE",
+            "start_pct": 3.0,
+            "state_retention_sec": 2592000
+          },
+          "v3_decision": {
+            "additional_entry_same_symbol": false,
+            "capital_allocation": {
+              "capital_time_efficiency": true,
+              "margin_safety_reserve": true,
+              "objective": "EXPECTED_ACCOUNT_CONTRIBUTION"
+            },
+            "correlation_size_adjustment": false,
+            "dynamic_trailing": false,
+            "enabled": true,
+            "entry_risk": {
+              "calibration": "ACCUMULATE_FIRST",
+              "enabled": true
+            },
+            "late_entry": {
+              "enabled": true,
+              "fail_closed_when_exact_replay_unavailable": true
+            },
+            "tf_conflict_live_override": false
+          }
+        },
+        "rollback_requested_to_local": false,
+        "strategy_id": "V3_COMBO_EFFICIENCY_TREND_RANGE_EXPANSION_6H_V1",
+        "strategy_instance_id": "SI_0b64c44f909547953cf31c4878ef7d26",
+        "strategy_policy_bundle_version": "PB_a6a99359b42390dd7487cb30ce1e8622",
+        "tier": "CANARY",
+        "tier_reason": "SAFETY_EVIDENCE_RECOVERED_AFTER_FILL_REPAIR",
+        "tier_updated_at": 1791995056,
+        "timeframe": "6H",
+        "trailing_policy_version": "PV_EXIT_FIXED_TRAILING_STANDARD_V1"
+      },
+      "SI_0c95ee6d1e3afcfb9effb93d6fc413c5": {
+        "approved_for_server_release": true,
+        "capital_weight": 0.2,
+        "enabled": true,
+        "entry_blocked": true,
+        "entry_enabled": true,
+        "exact_strategy_version": "SV_STRATEGY_c3dfbb6d68e4",
+        "policy_snapshot": {
+          "opposite_exit": {
+            "dynamic_policy": false,
+            "enabled": true,
+            "mode": "STANDARD_COMBINED"
+          },
+          "opposite_reopen": {
+            "dynamic_policy": false,
+            "enabled": true,
+            "mode": "NEXT_1H_STATE"
+          },
+          "policy_versions": {
+            "DIRECTION": "PV_DIRECTION_BASELINE_V1",
+            "ENTRY_RISK": "PV_ENTRY_RISK_BASELINE_V1",
+            "EXECUTION": "PV_EXECUTION_STANDARD_V1",
+            "EXIT": "PV_EXIT_FIXED_TRAILING_STANDARD_V1",
+            "PORTFOLIO": "PV_PORTFOLIO_MARGIN_RESERVE_V1",
+            "REENTRY": "PV_REENTRY_CURRENT_STATE_V1",
+            "REGIME": "PV_REGIME_REFERENCE_ONLY_V1",
+            "SYMBOL": "PV_SYMBOL_EXPECTED_CONTRIBUTION_V1"
+          },
+          "state_reentry": {
+            "dynamic_policy": false,
+            "enabled": true,
+            "mode": "CURRENT_STATE",
+            "next_check_tf": "1H"
+          },
+          "trailing": {
+            "apply_to_existing_positions": true,
+            "callback_pct": 1.5,
+            "dynamic_adjustment": false,
+            "enabled": true,
+            "mode": "FIXED_BASELINE",
+            "start_pct": 3.0,
+            "state_retention_sec": 2592000
+          },
+          "v3_decision": {
+            "additional_entry_same_symbol": false,
+            "capital_allocation": {
+              "capital_time_efficiency": true,
+              "margin_safety_reserve": true,
+              "objective": "EXPECTED_ACCOUNT_CONTRIBUTION"
+            },
+            "correlation_size_adjustment": false,
+            "dynamic_trailing": false,
+            "enabled": true,
+            "entry_risk": {
+              "calibration": "ACCUMULATE_FIRST",
+              "enabled": true
+            },
+            "late_entry": {
+              "enabled": true,
+              "fail_closed_when_exact_replay_unavailable": true
+            },
+            "tf_conflict_live_override": false
+          }
+        },
+        "rollback_requested_to_local": true,
+        "rollback_target": "PREVIOUS_VALIDATED_VERSION",
+        "strategy_id": "V3_COMBO_MOMENTUM_ACCEL_ADAPTIVE_CHANNEL_1D_V1",
+        "strategy_instance_id": "SI_0c95ee6d1e3afcfb9effb93d6fc413c5",
+        "strategy_policy_bundle_version": "PB_a6a99359b42390dd7487cb30ce1e8622",
+        "tier": "CANARY",
+        "tier_reason": "SAFETY_EVIDENCE_FAIL",
+        "tier_updated_at": 1792031718,
+        "timeframe": "1D",
+        "trailing_policy_version": "PV_EXIT_FIXED_TRAILING_STANDARD_V1"
+      },
+      "SI_236ed7959efe15164681112276fc02ef": {
+        "approved_for_server_release": true,
+        "capital_weight": 0.2,
+        "enabled": true,
+        "entry_blocked": false,
+        "entry_enabled": true,
+        "exact_strategy_version": "SV_STRATEGY_5e752e5dc7ab",
+        "policy_snapshot": {
+          "opposite_exit": {
+            "dynamic_policy": false,
+            "enabled": true,
+            "mode": "STANDARD_COMBINED"
+          },
+          "opposite_reopen": {
+            "dynamic_policy": false,
+            "enabled": true,
+            "mode": "NEXT_1H_STATE"
+          },
+          "policy_versions": {
+            "DIRECTION": "PV_DIRECTION_BASELINE_V1",
+            "ENTRY_RISK": "PV_ENTRY_RISK_BASELINE_V1",
+            "EXECUTION": "PV_EXECUTION_STANDARD_V1",
+            "EXIT": "PV_EXIT_FIXED_TRAILING_STANDARD_V1",
+            "PORTFOLIO": "PV_PORTFOLIO_MARGIN_RESERVE_V1",
+            "REENTRY": "PV_REENTRY_CURRENT_STATE_V1",
+            "REGIME": "PV_REGIME_REFERENCE_ONLY_V1",
+            "SYMBOL": "PV_SYMBOL_EXPECTED_CONTRIBUTION_V1"
+          },
+          "state_reentry": {
+            "dynamic_policy": false,
+            "enabled": true,
+            "mode": "CURRENT_STATE",
+            "next_check_tf": "1H"
+          },
+          "trailing": {
+            "apply_to_existing_positions": true,
+            "callback_pct": 1.5,
+            "dynamic_adjustment": false,
+            "enabled": true,
+            "mode": "FIXED_BASELINE",
+            "start_pct": 3.0,
+            "state_retention_sec": 2592000
+          },
+          "v3_decision": {
+            "additional_entry_same_symbol": false,
+            "capital_allocation": {
+              "capital_time_efficiency": true,
+              "margin_safety_reserve": true,
+              "objective": "EXPECTED_ACCOUNT_CONTRIBUTION"
+            },
+            "correlation_size_adjustment": false,
+            "dynamic_trailing": false,
+            "enabled": true,
+            "entry_risk": {
+              "calibration": "ACCUMULATE_FIRST",
+              "enabled": true
+            },
+            "late_entry": {
+              "enabled": true,
+              "fail_closed_when_exact_replay_unavailable": true
+            },
+            "tf_conflict_live_override": false
+          }
+        },
+        "rollback_requested_to_local": false,
+        "strategy_id": "V3_COMBO_DIRECTIONAL_ENTROPY_EFFICIENCY_PULLBACK_RESUME_1H_V1",
+        "strategy_instance_id": "SI_236ed7959efe15164681112276fc02ef",
+        "strategy_policy_bundle_version": "PB_a6a99359b42390dd7487cb30ce1e8622",
+        "tier": "CANARY",
+        "tier_reason": "SAFETY_EVIDENCE_RECOVERED_AUTO_TRANSIENT_LEG_MANAGEMENT",
+        "tier_updated_at": 1791994839,
+        "timeframe": "1H",
+        "trailing_policy_version": "PV_EXIT_FIXED_TRAILING_STANDARD_V1"
+      },
+      "SI_389b917fae9d4fb2a6f7fb0d8b4cc1f6": {
+        "approved_for_server_release": true,
+        "capital_weight": 0.2,
+        "enabled": true,
+        "entry_blocked": true,
+        "entry_enabled": true,
+        "exact_strategy_version": "SV_12H_STANDARD_EMA_CROSS_SAR_V1",
+        "policy_snapshot": {
+          "opposite_exit": {
+            "dynamic_policy": false,
+            "enabled": true,
+            "mode": "STANDARD_COMBINED"
+          },
+          "opposite_reopen": {
+            "dynamic_policy": false,
+            "enabled": true,
+            "mode": "NEXT_1H_STATE"
+          },
+          "policy_versions": {
+            "DIRECTION": "PV_DIRECTION_BASELINE_V1",
+            "ENTRY_RISK": "PV_ENTRY_RISK_BASELINE_V1",
+            "EXECUTION": "PV_EXECUTION_STANDARD_V1",
+            "EXIT": "PV_EXIT_FIXED_TRAILING_STANDARD_V1",
+            "PORTFOLIO": "PV_PORTFOLIO_MARGIN_RESERVE_V1",
+            "REENTRY": "PV_REENTRY_CURRENT_STATE_V1",
+            "REGIME": "PV_REGIME_REFERENCE_ONLY_V1",
+            "SYMBOL": "PV_SYMBOL_EXPECTED_CONTRIBUTION_V1"
+          },
+          "state_reentry": {
+            "dynamic_policy": false,
+            "enabled": true,
+            "mode": "CURRENT_STATE",
+            "next_check_tf": "1H"
+          },
+          "trailing": {
+            "apply_to_existing_positions": true,
+            "callback_pct": 1.5,
+            "dynamic_adjustment": false,
+            "enabled": true,
+            "mode": "FIXED_BASELINE",
+            "start_pct": 3.0,
+            "state_retention_sec": 2592000
+          },
+          "v3_decision": {
+            "additional_entry_same_symbol": false,
+            "capital_allocation": {
+              "capital_time_efficiency": true,
+              "margin_safety_reserve": true,
+              "objective": "EXPECTED_ACCOUNT_CONTRIBUTION"
+            },
+            "correlation_size_adjustment": false,
+            "dynamic_trailing": false,
+            "enabled": true,
+            "entry_risk": {
+              "calibration": "ACCUMULATE_FIRST",
+              "enabled": true
+            },
+            "late_entry": {
+              "enabled": true,
+              "fail_closed_when_exact_replay_unavailable": true
+            },
+            "tf_conflict_live_override": false
+          }
+        },
+        "rollback_requested_to_local": true,
+        "rollback_target": "PREVIOUS_VALIDATED_VERSION",
+        "strategy_id": "EMA_CROSS+SAR",
+        "strategy_instance_id": "SI_389b917fae9d4fb2a6f7fb0d8b4cc1f6",
+        "strategy_policy_bundle_version": "PB_a6a99359b42390dd7487cb30ce1e8622",
+        "tier": "CANARY",
+        "tier_reason": "SAFETY_EVIDENCE_FAIL",
+        "tier_updated_at": 1792031212,
+        "timeframe": "12H",
+        "trailing_policy_version": "PV_EXIT_FIXED_TRAILING_STANDARD_V1"
+      },
+      "SI_af7832741311a39167547e95b0e6d596": {
+        "approved_for_server_release": true,
+        "capital_weight": 0.2,
+        "enabled": true,
+        "entry_enabled": true,
+        "exact_strategy_version": "SV_STRATEGY_0058e16eb2cc",
+        "policy_snapshot": {
+          "behavior_policy": {
+            "opposite_exit": {
+              "dynamic_policy": false,
+              "enabled": true,
+              "mode": "STANDARD_COMBINED"
+            },
+            "opposite_reopen": {
+              "dynamic_policy": false,
+              "enabled": true,
+              "mode": "NEXT_1H_STATE"
+            },
+            "state_reentry": {
+              "dynamic_policy": false,
+              "enabled": true,
+              "mode": "CURRENT_STATE",
+              "next_check_tf": "1H"
+            },
+            "trailing": {
+              "apply_to_existing_positions": true,
+              "callback_pct": 1.5,
+              "dynamic_adjustment": false,
+              "enabled": true,
+              "mode": "FIXED_BASELINE",
+              "start_pct": 3.0,
+              "state_retention_sec": 2592000
+            }
+          },
+          "policy_versions": {
+            "DIRECTION": "PV_DIRECTION_BASELINE_V1",
+            "ENTRY_RISK": "PV_ENTRY_RISK_BASELINE_V1",
+            "EXECUTION": "PV_EXECUTION_STANDARD_V1",
+            "EXIT": "PV_EXIT_FIXED_TRAILING_STANDARD_V1",
+            "PORTFOLIO": "PV_PORTFOLIO_MARGIN_RESERVE_V1",
+            "REENTRY": "PV_REENTRY_CURRENT_STATE_V1",
+            "REGIME": "PV_REGIME_REFERENCE_ONLY_V1",
+            "SYMBOL": "PV_SYMBOL_EXPECTED_CONTRIBUTION_V1"
+          }
+        },
+        "qualification": "CANARY",
+        "rollback_requested_to_local": false,
+        "server_activation_authorized": true,
+        "strategy_id": "V3_DIRECTIONAL_ENTROPY",
+        "strategy_instance_id": "SI_af7832741311a39167547e95b0e6d596",
+        "strategy_policy_bundle_version": "PB_a6a99359b42390dd7487cb30ce1e8622",
+        "tier": "CANARY",
+        "timeframe": "30M"
+      },
+      "SI_ef085d10a9c6217cf6ebfcf955d012c8": {
+        "approved_for_server_release": true,
+        "capital_weight": 0.2,
+        "enabled": true,
+        "entry_enabled": true,
+        "exact_strategy_version": "SV_STRATEGY_f12106ed34fc",
+        "policy_snapshot": {
+          "behavior_policy": {
+            "opposite_exit": {
+              "dynamic_policy": false,
+              "enabled": true,
+              "mode": "STANDARD_COMBINED"
+            },
+            "opposite_reopen": {
+              "dynamic_policy": false,
+              "enabled": true,
+              "mode": "NEXT_1H_STATE"
+            },
+            "state_reentry": {
+              "dynamic_policy": false,
+              "enabled": true,
+              "mode": "CURRENT_STATE",
+              "next_check_tf": "1H"
+            },
+            "trailing": {
+              "apply_to_existing_positions": true,
+              "callback_pct": 1.5,
+              "dynamic_adjustment": false,
+              "enabled": true,
+              "mode": "FIXED_BASELINE",
+              "start_pct": 3.0,
+              "state_retention_sec": 2592000
+            }
+          },
+          "policy_versions": {
+            "DIRECTION": "PV_DIRECTION_BASELINE_V1",
+            "ENTRY_RISK": "PV_ENTRY_RISK_BASELINE_V1",
+            "EXECUTION": "PV_EXECUTION_STANDARD_V1",
+            "EXIT": "PV_EXIT_FIXED_TRAILING_STANDARD_V1",
+            "PORTFOLIO": "PV_PORTFOLIO_MARGIN_RESERVE_V1",
+            "REENTRY": "PV_REENTRY_CURRENT_STATE_V1",
+            "REGIME": "PV_REGIME_REFERENCE_ONLY_V1",
+            "SYMBOL": "PV_SYMBOL_EXPECTED_CONTRIBUTION_V1"
+          }
+        },
+        "qualification": "CANARY",
+        "rollback_requested_to_local": false,
+        "server_activation_authorized": true,
+        "strategy_id": "V3_SQUEEZE_RELEASE",
+        "strategy_instance_id": "SI_ef085d10a9c6217cf6ebfcf955d012c8",
+        "strategy_policy_bundle_version": "PB_a6a99359b42390dd7487cb30ce1e8622",
+        "tier": "CANARY",
+        "timeframe": "12H"
+      }
+    },
+    "tier_controller": {
+      "allowed_positive_transitions": [
+        "CANARY->SMALL",
+        "SMALL->NORMAL"
+      ],
+      "enabled": true,
+      "execution_telemetry_role": "REFERENCE_ONLY_NON_BLOCKING_FOR_ALL_PROMOTIONS",
+      "new_strategy_version_promotion": false,
+      "positive_scale_fail_closed_on_missing_evidence": true,
+      "reduction_transitions": [
+        "NORMAL->SMALL",
+        "NORMAL->CANARY",
+        "SMALL->CANARY"
+      ],
+      "required_positive_scale_evidence": [
+        "EXACT_STRATEGY_INSTANCE_LIFECYCLE",
+        "ENTRY_RISK_SAFE_SIZE_PASS",
+        "ACCOUNT_RISK_BUDGET_PASS",
+        "PORTFOLIO_TOTAL_EXPOSURE_PASS",
+        "AVAILABLE_MARGIN_PASS",
+        "MARGIN_SAFETY_RESERVE_PASS",
+        "SYMBOL_CONCENTRATION_PASS",
+        "STRATEGY_CONCENTRATION_PASS",
+        "CORRELATION_CONCENTRATION_PASS",
+        "COST_AND_LIQUIDITY_PASS",
+        "RELATIVE_TIER_COMPETITION_PASS",
+        "STRATEGY_LEG_LEDGER_RECONCILE_PASS",
+        "NO_CRITICAL_HARD_FAIL"
+      ],
+      "rollback_or_scale_down_may_bypass_positive_scale_evidence": true,
+      "rollback_target": "PREVIOUS_VALIDATED_VERSION",
+      "small_to_normal_extra_evidence": [
+        "ACTUAL_SMALL_LIVE_LIFECYCLE"
+      ],
+      "tier_maximum_eligible_strategies_per_timeframe": {
+        "CANARY": 8,
+        "NORMAL": 3,
+        "SMALL": 5
+      },
+      "tier_weights": {
+        "CANARY": 0.2,
+        "NORMAL": 1.0,
+        "SMALL": 0.5
+      },
+      "writer": "SERVER_PER_STRATEGY_INSTANCE_AFTER_CANARY_ACTIVATION",
+      "performance_auto": {
+        "enabled": true,
+        "apply_enabled": true,
+        "evaluation_interval_seconds": 300,
+        "transition_cooldown_seconds": 3600
+      },
+      "funding_auto": {
+        "enabled": true,
+        "poll_interval_seconds": 300
+      },
+      "tier_entry_benefits": {
+        "enabled": true,
+        "concurrent_leg_limits": {
+          "CANARY": 3,
+          "SMALL": 4,
+          "NORMAL": 5
+        },
+        "priority_order": [
+          "NORMAL",
+          "SMALL",
+          "CANARY"
+        ]
+      }
+    }
+  },
+  "research": {
+    "active_main_challenger_policy": "SAME_ENGINE_BASELINE_THEN_EVIDENCE_DOMINANCE_THEN_CANARY",
+    "active_main_detail_priority": [
+      "12H"
+    ],
+    "change_control_order": [
+      "ROADMAP_CONSTITUTION",
+      "VERIFIER",
+      "IMPLEMENTATION",
+      "SELF_VERIFICATION"
+    ],
+    "combination_policy": "BOUNDED_COMPLEMENTARY_ONLY_AFTER_STANDALONE_BROAD_VALIDATION",
+    "continuous_when_local_online": true,
+    "evidence_research_continuous": true,
+    "existing_trial_counter_frozen_at": 73,
+    "initial_resource_weights": {
+      "1D": 0.25,
+      "1H": 0.3,
+      "1W": 0.1,
+      "6H": 0.35
+    },
+    "lifecycle_regular_research": [
+      "ENTRY_SIGNAL",
+      "ENTRY_RISK",
+      "HOLD_PATH_MFE_MAE_GIVEBACK",
+      "EXIT_TRAILING_TIMING",
+      "REENTRY",
+      "COST_SLIPPAGE_FUNDING",
+      "REAL_BACKTEST_GAP"
+    ],
+    "main_fill_priority": [
+      "6H",
+      "1H",
+      "1D",
+      "1W"
+    ],
+    "new_single_strategy_family_count_initial": 18,
+    "parallel_tracks": [
+      "DIRECTION",
+      "STRATEGY",
+      "ENTRY_RISK",
+      "EXIT",
+      "REENTRY",
+      "SYMBOL",
+      "PORTFOLIO",
+      "REGIME",
+      "EXECUTION"
+    ],
+    "policy_version_required": true,
+    "preserve_trial73": true,
+    "release_validation_gates": {
+      "logic": "REQUIRED_PASS",
+      "overfit": "REQUIRED_PASS",
+      "package_on_failure": false,
+      "server_release_on_failure": false
+    },
+    "roadmap_constitution_required": true,
+    "roadmap_first_change_control": true,
+    "safe_grammar_bounded_wave_size": 48,
+    "safe_grammar_timeframes": [
+      "1H",
+      "6H",
+      "12H",
+      "1D",
+      "1W"
+    ],
+    "sealed_blind_policy": "ONE_SHOT_WINNER_ONLY_PER_RESEARCH_WAVE",
+    "search_until_winner": false,
+    "single_before_combination": true,
+    "stable_kernel_auto_mutation": false,
+    "strategy_lab_scope": "FULL_LIFECYCLE_NOT_ENTRY_ONLY",
+    "strategy_version_required": true,
+    "trial_budget_required": true
+  },
+  "roadmap_constitution": "V3_GOVERNANCE_20260901_R3",
+  "runtime_stage": "V3_INITIAL_FIXED_BASELINE",
+  "schema": "STRATEGY_CONFIG_V3",
+  "stable_kernel": {
+    "enabled": true,
+    "mode": "FROZEN_CORE_RESEARCH_CANNOT_MUTATE",
+    "policy_change": "VERSIONED_PAYLOAD_ONLY",
+    "protected_core": [
+      "runner.py",
+      "order.py",
+      "gate.py",
+      "reservation.py",
+      "collector.py",
+      "config.py",
+      "strategy_runtime.py",
+      "account_mode.py",
+      "capital_allocator.py",
+      "risk_engine.py",
+      "symbol.py",
+      "major.py",
+      "leverage.py"
+    ],
+    "research_core_mutation": false
+  },
+  "state_reentry": {
+    "dynamic_policy": false,
+    "enabled": true,
+    "mode": "CURRENT_STATE",
+    "next_check_tf": "1H"
+  },
+  "strategy_params": {},
+  "strategy_registry": {
+    "DIV": {
+      "engine": "ASSIST_FILE",
+      "file": "div.py",
+      "material_key": "div"
+    },
+    "EMA_CROSS": {
+      "engine": "ASSIST_FILE",
+      "file": "ema_cross.py",
+      "material_key": "ema_cross"
+    },
+    "MACD": {
+      "engine": "ASSIST_FILE",
+      "file": "macd.py",
+      "material_key": "macd"
+    },
+    "OBV": {
+      "engine": "ASSIST_FILE",
+      "file": "obv.py",
+      "material_key": "obv"
+    },
+    "SAR": {
+      "engine": "ASSIST_FILE",
+      "file": "sar.py",
+      "material_key": "sar"
+    },
+    "SHAPE": {
+      "engine": "ASSIST_FILE",
+      "file": "shape.py",
+      "material_key": "shape"
+    },
+    "STOCH": {
+      "engine": "ASSIST_FILE",
+      "file": "stoch.py",
+      "material_key": "stoch"
+    },
+    "V3_COMBO_DIRECTIONAL_ENTROPY_EFFICIENCY_PULLBACK_RESUME_1H_V1": {
+      "engine": "ASSIST_FILE",
+      "file": "v3_combo_directional_entropy_efficiency_pullback_resume_1h_v1.py",
+      "material_key": "v3_combo_directional_entropy_efficiency_pullback_resume_1h_v1"
+    },
+    "V3_COMBO_EFFICIENCY_TREND_RANGE_EXPANSION_6H_V1": {
+      "engine": "ASSIST_FILE",
+      "file": "v3_combo_efficiency_trend_range_expansion_6h_v1.py",
+      "material_key": "v3_combo_efficiency_trend_range_expansion_6h_v1"
+    },
+    "V3_COMBO_MOMENTUM_ACCEL_ADAPTIVE_CHANNEL_1D_V1": {
+      "engine": "ASSIST_FILE",
+      "file": "v3_combo_momentum_accel_adaptive_channel_1d_v1.py",
+      "material_key": "v3_combo_momentum_accel_adaptive_channel_1d_v1"
+    },
+    "V3_DIRECTIONAL_ENTROPY": {
+      "engine": "ASSIST_FILE",
+      "file": "v3_directional_entropy.py",
+      "material_key": "v3_directional_entropy"
+    },
+    "V3_SQUEEZE_RELEASE": {
+      "engine": "ASSIST_FILE",
+      "file": "v3_squeeze_release.py",
+      "material_key": "v3_squeeze_release"
+    }
+  },
+  "sync_policy": {
+    "base_code_always_sync": true,
+    "base_code_source": "LOCAL",
+    "local_test_real_order_default": false,
+    "roadmap_constitution_gate": true,
+    "runtime_state_source": "SERVER",
+    "server_push_hold_default": true,
+    "stable_kernel_research_mutation": false,
+    "strategy_payload_general_sync": false,
+    "strategy_payload_only_via_runtime_sync": true
+  },
+  "trailing": {
+    "apply_to_existing_positions": true,
+    "callback_pct": 1.5,
+    "dynamic_adjustment": false,
+    "enabled": true,
+    "mode": "FIXED_BASELINE",
+    "start_pct": 3.0,
+    "state_retention_sec": 2592000
+  },
+  "universe_top_n": 35,
+  "updated_by": "V3_MIGRATION",
+  "v3_decision": {
+    "additional_entry_same_symbol": false,
+    "atomic_capacity_reservation_required_before_live_multi_leg": true,
+    "capital_allocation": {
+      "capital_time_efficiency": true,
+      "margin_safety_reserve": true,
+      "objective": "EXPECTED_ACCOUNT_CONTRIBUTION"
+    },
+    "correlation_size_adjustment": false,
+    "dynamic_trailing": false,
+    "enabled": true,
+    "entry_risk": {
+      "calibration": "ACCUMULATE_FIRST",
+      "enabled": true
+    },
+    "late_entry": {
+      "enabled": true,
+      "fail_closed_when_exact_replay_unavailable": true
+    },
+    "live_multi_leg_activation": false,
+    "logical_basket_target_architecture": true,
+    "tf_conflict_live_override": false
+  },
+  "version": "V3_AUTO_20260830_043713"
+}
