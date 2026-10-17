@@ -1,7 +1,7 @@
 {
   "schema": "B_BOT_RESEARCH_CHECKPOINT_V1",
   "release_contract": "FINAL_GATES_THEN_EXISTING_RUNTIME_WORKER_V1",
-  "source_run_id": "39011991273",
+  "source_run_id": "39029509632",
   "source_commit": "6b5c9265405a53ba258c3a2e3694f7d21b210977",
   "engine_sha256": "3c665f886a02757e3b35444b437312385d88790c47c6346e90c64dfc0a5a86ed",
   "input_archives": {
@@ -470,7 +470,7 @@
     },
     "strategy_lab/results/v3/historical_314_pipeline_stage2.json": {
       "bytes": 39204,
-      "sha256": "7c78b6b4303aa4e3536589d5d0d888c3c3922a8d9be7aa8190833f8a10faca41"
+      "sha256": "bd10f7375bd543fe23549c13f3719605331a859c58db3002fb7957b5c61627f4"
     },
     "strategy_lab/results/v3/individual_trailing_stage3.json": {
       "bytes": 20307,
@@ -501,5 +501,5 @@
       "sha256": "c503193941efb53cce3c83bb29c465b0db9743e454d38639078aa97c0a88246e"
     }
   },
-  "archive_sha256": "0e0e92642436cba469014a335c59012e113ce986e0cbefa69a1e8a2cc083051b"
+  "archive_sha256": "4d374f19377536bf7c73a6ef116be10955a5d0904991df0905b2ca54017d9fb1"
 }
