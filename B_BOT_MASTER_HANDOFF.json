@@ -6006,7 +6006,7 @@
     "strategy_lab/v3_strategy_research.py": "STRATEGY_RESEARCH_AND_MAIN_SELECTION",
     "verify_green7a_execution_telemetry_processor.py": "GREEN7A_EXECUTION_TELEMETRY_PROCESSOR_VERIFIER"
   },
-  "generated_at": "2026-10-18T09:21:33.182705+00:00",
+  "generated_at": "2026-10-18T20:42:09.336861+00:00",
   "identity": {
     "direct_entry_timeframes": [
       "1H",
@@ -6168,18 +6168,7 @@
       "source": "strategy_lab/results/v3/research_knowledge.json"
     },
     "research_state": {},
-    "result_index": [
-      {
-        "candidate": null,
-        "decision": null,
-        "next_action": "WAIT_FOR_FIRST_NATURAL_EXACT_VERSION_CANARY_ENTRY",
-        "path": "strategy_lab/results/master_handoff_system_latest.json",
-        "research_id": null,
-        "schema": "B_BOT_V3_MASTER_HANDOFF_SYSTEM_V3",
-        "status": null,
-        "winner": null
-      }
-    ],
+    "result_index": [],
     "runtime_knowledge_summary": {
       "record_count": 0,
       "schema": null,
@@ -6215,7 +6204,7 @@
   "purpose": "SINGLE_AI_HANDOFF_AND_BBOT_MANUAL",
   "research_development": {
     "evidence_boundary": "DEVELOPMENT_STATUS_ONLY_NOT_LIVE_OR_RELEASE_EVIDENCE",
-    "sha256": "c1556691c512bedc410aa42d18f8bb66474db70c14e5c6b11a5ffb2bb0688396",
+    "sha256": "ed8915d30f45cae4fd4e873d973f5225ce2807a4799d372a8431702d3f22c1c4",
     "source": "strategy_lab/research_development_state.json",
     "state": {
       "authorized_scope": [
@@ -6227,11 +6216,13 @@
       ],
       "base_main": "6b5c9265405a53ba258c3a2e3694f7d21b210977",
       "branch": "research-speed",
+      "checkpoint_main": "7a121b3e91efb3ac429b523a427bd8fc64d36fbf",
       "completed": [
         "Prepare/compute/finalize boundaries drafted for basic/grammar functions; not connected to parallel controller",
         "Development checkpoint committed on research-speed",
         "Main historical research reserve_trial signature mismatch fixed; six identity regression tests; 209 local tests passed",
-        "Main recovery verified: research run 39114847248 SUCCESS (8 cycles), engineering run 39114847224 SUCCESS (209 tests); research-state and runtime-candidates uploaded; exported candidates 0."
+        "Main recovery verified: research run 39114847248 SUCCESS (8 cycles), engineering run 39114847224 SUCCESS (209 tests); research-state and runtime-candidates uploaded; exported candidates 0.",
+        "Canonical controller intermediate checkpoint implementation: first completed cycle, then at safe completed-cycle boundaries after 60 seconds. Remote restore-head lease and non-force CAS protect against overwriting other runs. 213 local engineering tests passed; remote validation pending."
       ],
       "continuation_rules": [
         "Fetch latest main and research-speed; preserve other changes",
@@ -6239,24 +6230,40 @@
         "Do not merge WIP compute refactor until concurrency/recovery regression tests pass",
         "Do not modify operating orders, leverage, tiers, final validation or registration gates",
         "A stopped chat does not stop GitHub Actions; runner failures can still interrupt jobs",
-        "Existing end-of-job checkpoint is not a guarantee of recovery from arbitrary hard termination; mid-run recovery remains unimplemented"
+        "Intermediate saves protect completed cycles. A hard kill can still lose work since the last successful remote save; do not claim zero-loss recovery."
       ],
       "future_full_frame_parallelism": "Not yet measured. Keep final/blind stages and state writes serialized; evaluate resources before raising compute concurrency.",
       "pending": [
+        "Verify main intermediate-save run and downstream AWS received_commit; update observed evidence.",
         "Reconcile current policy family 30% share with a 3-worker pool before scheduling",
         "Single coordinator writes ledgers; compute workers run official run_strategy only",
-        "Remote checkpoint CAS and pending task recovery tests",
         "Time budget and bounded subprocess timeout/checkpoint margins",
         "Genetic/basic queue allocation and fixed training data; sealed data excluded",
         "Exact exit/reentry implementation and parity evidence not yet complete",
-        "Update canonical handoff with final measured tests and actual runs before merge"
+        "Update canonical handoff with final measured tests and actual runs before merge",
+        "In-flight interrupted work recovery and exactly-once finalization remain incomplete; periodic snapshots cover completed cycles only."
       ],
+      "policy_decision_required": {
+        "existing_family_share_cap": 0.3,
+        "one_family_one_worker_share": 0.3333333333333333,
+        "proposed_amendment": "For compute worker pools of 2 or 3 only, allow one worker per distinct family (minimum integer slot); retain original 30% cap for pools >=4, exact-version limit, timeframe weights, final gates and single state writer.",
+        "requested_compute_workers": 3,
+        "source": "ROADMAP_CONSTITUTION_V3.json",
+        "status": "PROPOSED_NOT_APPLIED"
+      },
       "repository": "hans1177/bbot-lab",
       "research_unblock_main": "63aea437b46d1cc501fa63f1aadb281df5bf8bd0",
-      "runtime_evidence": "AWS state not inspected in this development snapshot; do not infer current health or candidate count",
+      "runtime_evidence": {
+        "feedback_commit": "a698c7dc44626d7ff49349e09cb2b62cde034404",
+        "heartbeat_epoch": 1792355789.4519188,
+        "matches_latest_candidates": true,
+        "observed_at_kst": "2026-10-19T05:36:50+09:00",
+        "received_commit": "e1b310184f9bd1d134ef0bdda91d18e2f0fd91dd",
+        "scope": "Research receive and collector heartbeat only; operating order/fill health not verified."
+      },
       "schema": "B_BOT_RESEARCH_DEVELOPMENT_STATE_V1",
       "status": "IN_PROGRESS_NOT_DEPLOYED",
-      "updated_at": "2026-10-18",
+      "updated_at": "2026-10-19",
       "verified_runs": {
         "candidate_commit": "e4bf88364727a20caf89c5a06c110bdb94f4ed6a",
         "engineering": 39114847224,
@@ -7509,7 +7516,7 @@
       "size_bytes": null
     }
   },
-  "snapshot_hash": "42155079d704f6f69c02e0182306270ca84a72ada1265b16c01468de0b00fdaf",
+  "snapshot_hash": "a98ffd58657991a69397c0eb6a2e77e1a99ee8385da8e850ee8d049631833270",
   "source_ledgers": {
     "candidate_registry": {
       "exists": false,

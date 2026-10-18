@@ -1,5 +1,5 @@
 # 파일명: tests/test_cloud_checkpoint.py
-import contextlib,hashlib,io,json,os,shutil,tempfile,unittest,zipfile
+import contextlib,hashlib,io,json,os,shutil,tempfile,unittest,zipfile,importlib.util,ast,argparse,sys,types
 from pathlib import Path
 from unittest.mock import patch
 import yaml
@@ -15,6 +15,7 @@ class CloudCheckpointTests(unittest.TestCase):
         self.state=self.root/'strategy_lab/results/v3';self.state.mkdir(parents=True)
         (self.root/'ROADMAP_CONSTITUTION_V3.json').write_text('{"policy":"fixture"}')
         (self.root/'strategy_lab/run_strategy.py').write_text('# fixed fixture engine\n')
+        shutil.copyfile(REPO/'strategy_lab/v3_research_knowledge.py',self.root/'strategy_lab/v3_research_knowledge.py')
         (self.root/'INPUT_RECEIPT.json').write_text('{"start.zip":"fixed","extra.zip":"fixed"}')
         (self.state/'trial_ledger.json').write_text('{"schema":"fixture","entries":[{"trial":1}]}')
         (self.state/'candidate.py').write_text('# exact candidate fixture\n')
@@ -34,6 +35,64 @@ class CloudCheckpointTests(unittest.TestCase):
     def test_archive_tamper_rejected(self):
         self.save();(self.base/'research-checkpoint-in/checkpoint.zip').write_bytes(b'tamper')
         with self.assertRaisesRegex(RuntimeError,'CHECKPOINT_HASH_MISMATCH'):self.run_step('Restore exact research state')
+    def test_repeated_checkpoint_replaces_archive_with_latest_state(self):
+        self.run_step('Preserve research checkpoint')
+        (self.state/'trial_ledger.json').write_text('{"completed":2}')
+        self.run_step('Preserve research checkpoint')
+        with zipfile.ZipFile(self.base/'research-checkpoint-out/checkpoint.zip') as archive:
+            self.assertEqual(json.loads(archive.read('strategy_lab/results/v3/trial_ledger.json')),{'completed':2})
+    def publish(self,head='original',lease='original'):
+        self.run_step('Preserve research checkpoint')
+        if lease is not None:(self.base/'research-state-head.json').write_text(json.dumps({'head':lease}))
+        spec=importlib.util.spec_from_file_location('checkpoint_knowledge',REPO/'strategy_lab/v3_research_knowledge.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        self.requests=[];remote={'head':head}
+        def request(req,timeout):
+            body=json.loads(req.data) if req.data else None
+            path=req.full_url.split('/repos/owner/repo')[1]
+            self.requests.append((path,body))
+            if path=='/git/ref/heads/research-state':result={'object':{'sha':remote['head']}}
+            elif path=='/git/commits':
+                self.assertEqual(body['parents'],[remote['head']]);result={'sha':'new-commit'}
+            elif path=='/git/refs/heads/research-state':
+                self.assertIs(body['force'],False);remote['head']=body['sha'];result={}
+            else:result={'sha':'object'}
+            return io.StringIO(json.dumps(result))
+        env=dict(self.env,GH_TOKEN='fixture',GITHUB_REPOSITORY='owner/repo',GITHUB_RUN_ATTEMPT='1')
+        with patch.dict(os.environ,env),patch('urllib.request.urlopen',side_effect=request):module.publish_cloud_checkpoint()
+    def test_remote_advance_blocks_stale_checkpoint_before_any_write(self):
+        with self.assertRaisesRegex(RuntimeError,'CHECKPOINT_REMOTE_STATE_CHANGED'):self.publish(head='other-run')
+        self.assertTrue(all(body is None for _,body in self.requests))
+    def test_missing_restore_lease_cannot_publish(self):
+        with self.assertRaisesRegex(RuntimeError,'CHECKPOINT_RESTORE_LEASE_MISSING'):self.publish(lease=None)
+        self.assertTrue(all(body is None for _,body in self.requests))
+    def test_intermediate_publish_updates_lease_without_candidate_release(self):
+        self.publish()
+        self.assertEqual(json.loads((self.base/'research-state-head.json').read_text()),{'head':'new-commit'})
+        self.assertFalse(any('runtime-candidates' in path for path,_ in self.requests))
+    def test_controller_checkpoints_completed_cycles_under_lock(self):
+        node=next(n for n in ast.parse((REPO/'strategy_lab/research_controller.py').read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='main')
+        events=[];state={'locked':False,'clock':0}
+        @contextlib.contextmanager
+        def lock():
+            state['locked']=True
+            try:yield
+            finally:state['locked']=False
+        def record(event):
+            self.assertTrue(state['locked']);events.append(event)
+        def research(held):
+            record('research');return {'action':'AUTO_RESEARCH_MANAGER_STAGE10'}
+        def sleep(seconds):state['clock']+=60
+        ns={'argparse':argparse,'Path':Path,'os':os,'json':json,'lock':lock,
+            'PUSH_HOLD':types.SimpleNamespace(exists=lambda:True),
+            'managed_research_once':research,
+            'time':types.SimpleNamespace(monotonic=lambda:state['clock'],sleep=sleep),
+            'knowledge':types.SimpleNamespace(save_cloud_checkpoint=lambda:record('save'),publish_cloud_checkpoint=lambda:record('publish'))}
+        exec(compile(ast.Module(body=[node],type_ignores=[]),'actual_controller_main','exec'),ns)
+        argv=['controller','--mode','loop','--enable-research','--max-cycles','2','--checkpoint-seconds','60']
+        with patch.object(sys,'argv',argv),patch.dict(os.environ,{'GITHUB_ACTIONS':'true'}),contextlib.redirect_stdout(io.StringIO()):ns['main']()
+        self.assertEqual(events,['research','save','publish','research','save','publish'])
+        self.assertFalse(state['locked'])
     def test_changed_engine_rejected(self):
         self.save();(self.root/'strategy_lab/run_strategy.py').write_text('# changed engine')
         with self.assertRaisesRegex(RuntimeError,'CHECKPOINT_ENGINE_MISMATCH'):self.run_step('Restore exact research state')

@@ -1261,7 +1261,10 @@ def main() -> None:
     parser.add_argument("--export-lock-wait-seconds", type=int, default=0)
     parser.add_argument("--sleep-sec", type=int, default=60)
     parser.add_argument("--max-cycles", type=int, default=0)
+    parser.add_argument("--checkpoint-seconds", type=int, default=0)
     args = parser.parse_args()
+    if args.checkpoint_seconds and (args.checkpoint_seconds < 60 or not os.getenv("GITHUB_ACTIONS")):
+        parser.error("checkpoint interval requires GitHub Actions and at least 60 seconds")
 
     if args.mode == "status":
         print(json.dumps(controller_status(), ensure_ascii=False, indent=2, default=str))
@@ -1295,7 +1298,10 @@ def main() -> None:
             raise SystemExit(2)
         return
 
+    last_checkpoint = None
+
     def one():
+        nonlocal last_checkpoint
         try:
             with lock():
                 # MANAGED_RESEARCH_CLI_WIRE_V1
@@ -1306,11 +1312,15 @@ def main() -> None:
                 # manager. HOLD-off execution keeps the legacy run_once
                 # runtime/release path unchanged.
                 if args.enable_research and PUSH_HOLD.exists():
-                    return managed_research_once(True)
-
-                return run_once(
-                    enable_research=args.enable_research
-                )
+                    result = managed_research_once(True)
+                else:
+                    result = run_once(enable_research=args.enable_research)
+                if (args.checkpoint_seconds and result.get('action')=='AUTO_RESEARCH_MANAGER_STAGE10'
+                    and (last_checkpoint is None or time.monotonic()-last_checkpoint >= args.checkpoint_seconds)):
+                    knowledge.save_cloud_checkpoint()
+                    knowledge.publish_cloud_checkpoint()
+                    last_checkpoint = time.monotonic()
+                return result
         except RuntimeError as exc:
             if str(exc) == "RESEARCH_ALREADY_RUNNING":
                 return {"action": "SKIP", "reason": "RESEARCH_ALREADY_RUNNING"}

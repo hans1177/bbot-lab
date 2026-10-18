@@ -1,6 +1,6 @@
 {
   "schema": "B_BOT_RESEARCH_DEVELOPMENT_STATE_V1",
-  "updated_at": "2026-10-18",
+  "updated_at": "2026-10-19",
   "repository": "hans1177/bbot-lab",
   "branch": "research-speed",
   "base_main": "6b5c9265405a53ba258c3a2e3694f7d21b210977",
@@ -17,16 +17,18 @@
     "Prepare/compute/finalize boundaries drafted for basic/grammar functions; not connected to parallel controller",
     "Development checkpoint committed on research-speed",
     "Main historical research reserve_trial signature mismatch fixed; six identity regression tests; 209 local tests passed",
-    "Main recovery verified: research run 39114847248 SUCCESS (8 cycles), engineering run 39114847224 SUCCESS (209 tests); research-state and runtime-candidates uploaded; exported candidates 0."
+    "Main recovery verified: research run 39114847248 SUCCESS (8 cycles), engineering run 39114847224 SUCCESS (209 tests); research-state and runtime-candidates uploaded; exported candidates 0.",
+    "Canonical controller intermediate checkpoint implementation: first completed cycle, then at safe completed-cycle boundaries after 60 seconds. Remote restore-head lease and non-force CAS protect against overwriting other runs. 213 local engineering tests passed; remote validation pending."
   ],
   "pending": [
+    "Verify main intermediate-save run and downstream AWS received_commit; update observed evidence.",
     "Reconcile current policy family 30% share with a 3-worker pool before scheduling",
     "Single coordinator writes ledgers; compute workers run official run_strategy only",
-    "Remote checkpoint CAS and pending task recovery tests",
     "Time budget and bounded subprocess timeout/checkpoint margins",
     "Genetic/basic queue allocation and fixed training data; sealed data excluded",
     "Exact exit/reentry implementation and parity evidence not yet complete",
-    "Update canonical handoff with final measured tests and actual runs before merge"
+    "Update canonical handoff with final measured tests and actual runs before merge",
+    "In-flight interrupted work recovery and exactly-once finalization remain incomplete; periodic snapshots cover completed cycles only."
   ],
   "continuation_rules": [
     "Fetch latest main and research-speed; preserve other changes",
@@ -34,9 +36,16 @@
     "Do not merge WIP compute refactor until concurrency/recovery regression tests pass",
     "Do not modify operating orders, leverage, tiers, final validation or registration gates",
     "A stopped chat does not stop GitHub Actions; runner failures can still interrupt jobs",
-    "Existing end-of-job checkpoint is not a guarantee of recovery from arbitrary hard termination; mid-run recovery remains unimplemented"
+    "Intermediate saves protect completed cycles. A hard kill can still lose work since the last successful remote save; do not claim zero-loss recovery."
   ],
-  "runtime_evidence": "AWS state not inspected in this development snapshot; do not infer current health or candidate count",
+  "runtime_evidence": {
+    "observed_at_kst": "2026-10-19T05:36:50+09:00",
+    "feedback_commit": "a698c7dc44626d7ff49349e09cb2b62cde034404",
+    "received_commit": "e1b310184f9bd1d134ef0bdda91d18e2f0fd91dd",
+    "matches_latest_candidates": true,
+    "heartbeat_epoch": 1792355789.4519188,
+    "scope": "Research receive and collector heartbeat only; operating order/fill health not verified."
+  },
   "future_full_frame_parallelism": "Not yet measured. Keep final/blind stages and state writes serialized; evaluate resources before raising compute concurrency.",
   "verified_runs": {
     "research": 39114847248,
@@ -47,5 +56,14 @@
     "exported_candidates": 0,
     "research_state_commit": "b91026081950da8feb5d4bbdc9ae4f6e83889a81",
     "candidate_commit": "e4bf88364727a20caf89c5a06c110bdb94f4ed6a"
+  },
+  "checkpoint_main": "7a121b3e91efb3ac429b523a427bd8fc64d36fbf",
+  "policy_decision_required": {
+    "source": "ROADMAP_CONSTITUTION_V3.json",
+    "existing_family_share_cap": 0.3,
+    "requested_compute_workers": 3,
+    "one_family_one_worker_share": 0.3333333333333333,
+    "proposed_amendment": "For compute worker pools of 2 or 3 only, allow one worker per distinct family (minimum integer slot); retain original 30% cap for pools >=4, exact-version limit, timeframe weights, final gates and single state writer.",
+    "status": "PROPOSED_NOT_APPLIED"
   }
 }

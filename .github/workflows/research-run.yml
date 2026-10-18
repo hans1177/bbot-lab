@@ -228,6 +228,7 @@ jobs:
           except urllib.error.HTTPError as error:
               if error.code!=404:raise
               if get('/actions/workflows/research-run.yml/runs?status=success&per_page=1').get('total_count',0):raise RuntimeError('PREVIOUS_CHECKPOINT_MISSING_NO_SILENT_RESET')
+              head=None
               print('FIRST_RUN_FRESH_RESEARCH')
           else:
               commit=get('/git/commits/'+head)
@@ -242,6 +243,7 @@ jobs:
                   if len(raw)!=blob['size']:raise RuntimeError('STATE_BLOB_SIZE')
                   (folder/name).write_bytes(raw)
               print('PRIVATE_GIT_CHECKPOINT_DOWNLOADED',head)
+          (Path(os.environ['RUNNER_TEMP'])/'research-state-head.json').write_text(json.dumps({'head':head}))
       - name: Restore exact research state
         id: restore
         shell: python
@@ -283,10 +285,11 @@ jobs:
         id: research
         env:
           REQUESTED_CYCLES: ${{ inputs.cycles || '8' }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -o pipefail
           case "$REQUESTED_CYCLES" in 1|4|8) ;; *) exit 40 ;; esac
-          python "$BBOT_LOCAL_ROOT/strategy_lab/research_controller.py" --mode loop --enable-research --max-cycles "$REQUESTED_CYCLES" --sleep-sec 1 | tee "$RUNNER_TEMP/research-cycles.jsonl"
+          python "$BBOT_LOCAL_ROOT/strategy_lab/research_controller.py" --mode loop --enable-research --max-cycles "$REQUESTED_CYCLES" --sleep-sec 1 --checkpoint-seconds 60 | tee "$RUNNER_TEMP/research-cycles.jsonl"
           python - <<'PY'
           import json,os
           from pathlib import Path
@@ -326,23 +329,11 @@ jobs:
         if: always() && steps.prepare.outcome == 'success' && steps.restore.outcome == 'success'
         shell: python
         run: |
-          import hashlib,json,os,zipfile
+          import os,sys
           from pathlib import Path
-          root=Path(os.environ['BBOT_LOCAL_ROOT']);out=Path(os.environ['RUNNER_TEMP'])/'research-checkpoint-out';out.mkdir()
-          state=root/'strategy_lab/results'
-          files=[path for path in state.rglob('*') if path.is_file() and path.suffix.lower() in {'.json','.jsonl','.py','.csv','.parquet'} and '__pycache__' not in path.parts]
-          if not files:raise RuntimeError('RESEARCH_STATE_NOT_CREATED')
-          receipt={'schema':'B_BOT_RESEARCH_CHECKPOINT_V1','release_contract':'FINAL_GATES_THEN_EXISTING_RUNTIME_WORKER_V1','source_run_id':os.environ['GITHUB_RUN_ID'],'source_commit':os.environ['GITHUB_SHA'],'engine_sha256':hashlib.sha256((root/'strategy_lab/run_strategy.py').read_bytes()).hexdigest(),'input_archives':json.loads((root/'INPUT_RECEIPT.json').read_text()),'constitution_sha256':hashlib.sha256((root/'ROADMAP_CONSTITUTION_V3.json').read_bytes()).hexdigest(),'files':{}}
-          with zipfile.ZipFile(out/'checkpoint.zip','w',zipfile.ZIP_DEFLATED,compresslevel=1) as archive:
-              for path in sorted(files):
-                  if path.is_symlink() or not path.resolve().is_relative_to(state.resolve()):raise RuntimeError('STATE_PATH_FORBIDDEN')
-                  if path.stat().st_size>512*1024**2:raise RuntimeError('STATE_FILE_TOO_LARGE')
-                  raw=path.read_bytes();name=path.relative_to(root).as_posix()
-                  if path.suffix=='.json':json.loads(raw.decode('utf-8-sig'))
-                  archive.writestr(name,raw);receipt['files'][name]={'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
-          receipt['archive_sha256']=hashlib.sha256((out/'checkpoint.zip').read_bytes()).hexdigest()
-          (out/'CHECKPOINT.json').write_text(json.dumps(receipt,indent=2))
-          print('RESEARCH_CHECKPOINT_SAVED',len(files))
+          sys.path.insert(0,str(Path(os.environ['BBOT_LOCAL_ROOT'])/'strategy_lab'))
+          import v3_research_knowledge
+          v3_research_knowledge.save_cloud_checkpoint()
       - name: Upload private checkpoint
         id: checkpoint_upload
         if: always() && steps.checkpoint.outcome == 'success'
@@ -350,31 +341,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: python
         run: |
-          import base64,json,os,urllib.request,urllib.error
+          import os,sys
           from pathlib import Path
-          api='https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']
-          def request(path,data=None,method=None):
-              body=None if data is None else json.dumps(data).encode()
-              req=urllib.request.Request(api+path,data=body,method=method,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'})
-              with urllib.request.urlopen(req,timeout=90) as response:return json.load(response)
-          for branch,folder in [('research-state','research-checkpoint-out'),('runtime-candidates','runtime-candidates-out')]:
-              out=Path(os.environ['RUNNER_TEMP'])/folder
-              if not out.exists():continue
-              if branch=='runtime-candidates' and not (out/'MANIFEST.json').is_file():continue
-              try:parent=request('/git/ref/heads/'+branch)['object']['sha']
-              except urllib.error.HTTPError as error:
-                  if error.code!=404:raise
-                  parent=None
-              elements=[]
-              for path in sorted(out.rglob('*')):
-                  if not path.is_file():continue
-                  name=path.relative_to(out).as_posix();raw=path.read_bytes()
-                  if len(raw)>90*1024**2:raise RuntimeError('CHECKPOINT_GIT_BLOB_LIMIT')
-                  blob=request('/git/blobs',{'content':base64.b64encode(raw).decode(),'encoding':'base64'})
-                  elements.append({'path':name,'mode':'100644','type':'blob','sha':blob['sha']})
-              tree=request('/git/trees',{'tree':elements})
-              commit=request('/git/commits',{'message':branch+' run '+os.environ['GITHUB_RUN_ID']+' attempt '+os.environ['GITHUB_RUN_ATTEMPT'],'tree':tree['sha'],'parents':[parent] if parent else []})
-              if parent:request('/git/refs/heads/'+branch,{'sha':commit['sha'],'force':False},'PATCH')
-              else:request('/git/refs',{'ref':'refs/heads/'+branch,'sha':commit['sha']})
-              if request('/git/ref/heads/'+branch)['object']['sha']!=commit['sha']:raise RuntimeError('CHECKPOINT_REF_VERIFY')
-              print('PRIVATE_GIT_HANDOFF_SAVED_AND_VERIFIED',branch,commit['sha'])
+          sys.path.insert(0,str(Path(os.environ['BBOT_LOCAL_ROOT'])/'strategy_lab'))
+          import v3_research_knowledge
+          v3_research_knowledge.publish_cloud_checkpoint(include_candidates=True)
