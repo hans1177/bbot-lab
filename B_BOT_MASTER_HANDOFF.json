@@ -6006,7 +6006,7 @@
     "strategy_lab/v3_strategy_research.py": "STRATEGY_RESEARCH_AND_MAIN_SELECTION",
     "verify_green7a_execution_telemetry_processor.py": "GREEN7A_EXECUTION_TELEMETRY_PROCESSOR_VERIFIER"
   },
-  "generated_at": "2026-10-18T09:19:51.713327+00:00",
+  "generated_at": "2026-10-18T09:21:33.182705+00:00",
   "identity": {
     "direct_entry_timeframes": [
       "1H",
@@ -6168,7 +6168,18 @@
       "source": "strategy_lab/results/v3/research_knowledge.json"
     },
     "research_state": {},
-    "result_index": [],
+    "result_index": [
+      {
+        "candidate": null,
+        "decision": null,
+        "next_action": "WAIT_FOR_FIRST_NATURAL_EXACT_VERSION_CANARY_ENTRY",
+        "path": "strategy_lab/results/master_handoff_system_latest.json",
+        "research_id": null,
+        "schema": "B_BOT_V3_MASTER_HANDOFF_SYSTEM_V3",
+        "status": null,
+        "winner": null
+      }
+    ],
     "runtime_knowledge_summary": {
       "record_count": 0,
       "schema": null,
@@ -6204,7 +6215,7 @@
   "purpose": "SINGLE_AI_HANDOFF_AND_BBOT_MANUAL",
   "research_development": {
     "evidence_boundary": "DEVELOPMENT_STATUS_ONLY_NOT_LIVE_OR_RELEASE_EVIDENCE",
-    "sha256": "115227e097adf6b353d09d079f0df2f582be2139f5d0c1d3a14d8c4aeae025ea",
+    "sha256": "c1556691c512bedc410aa42d18f8bb66474db70c14e5c6b11a5ffb2bb0688396",
     "source": "strategy_lab/research_development_state.json",
     "state": {
       "authorized_scope": [
@@ -6219,7 +6230,8 @@
       "completed": [
         "Prepare/compute/finalize boundaries drafted for basic/grammar functions; not connected to parallel controller",
         "Development checkpoint committed on research-speed",
-        "Main historical research reserve_trial signature mismatch fixed; six identity regression tests; 209 local tests passed"
+        "Main historical research reserve_trial signature mismatch fixed; six identity regression tests; 209 local tests passed",
+        "Main recovery verified: research run 39114847248 SUCCESS (8 cycles), engineering run 39114847224 SUCCESS (209 tests); research-state and runtime-candidates uploaded; exported candidates 0."
       ],
       "continuation_rules": [
         "Fetch latest main and research-speed; preserve other changes",
@@ -6231,7 +6243,6 @@
       ],
       "future_full_frame_parallelism": "Not yet measured. Keep final/blind stages and state writes serialized; evaluate resources before raising compute concurrency.",
       "pending": [
-        "Verify main research run 39114847248 and engineering run 39114847224",
         "Reconcile current policy family 30% share with a 3-worker pool before scheduling",
         "Single coordinator writes ledgers; compute workers run official run_strategy only",
         "Remote checkpoint CAS and pending task recovery tests",
@@ -6245,7 +6256,17 @@
       "runtime_evidence": "AWS state not inspected in this development snapshot; do not infer current health or candidate count",
       "schema": "B_BOT_RESEARCH_DEVELOPMENT_STATE_V1",
       "status": "IN_PROGRESS_NOT_DEPLOYED",
-      "updated_at": "2026-10-18"
+      "updated_at": "2026-10-18",
+      "verified_runs": {
+        "candidate_commit": "e4bf88364727a20caf89c5a06c110bdb94f4ed6a",
+        "engineering": 39114847224,
+        "engineering_tests": 209,
+        "exported_candidates": 0,
+        "research": 39114847248,
+        "research_cycles": 8,
+        "research_state_commit": "b91026081950da8feb5d4bbdc9ae4f6e83889a81",
+        "source_commit": "63aea437b46d1cc501fa63f1aadb281df5bf8bd0"
+      }
     }
   },
   "research_tracks": {
@@ -7488,7 +7509,7 @@
       "size_bytes": null
     }
   },
-  "snapshot_hash": "c40a229159b054f96e58e981fa5d63a3a1652db07e8e9753be27ecfc2839e691",
+  "snapshot_hash": "42155079d704f6f69c02e0182306270ca84a72ada1265b16c01468de0b00fdaf",
   "source_ledgers": {
     "candidate_registry": {
       "exists": false,
