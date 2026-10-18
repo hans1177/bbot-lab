@@ -64,6 +64,10 @@ def reserve_trial(
     tf,
     kind="SINGLE_FAMILY",
     rerun_reason=None,
+    *,
+    exact_strategy_version=None,
+    source_file=None,
+    source_sha256=None,
 ):
     # EXACT_COMPLETED_RERUN_GUARD_V1
     #
@@ -100,6 +104,17 @@ def reserve_trial(
             continue
 
         if str(e.get("kind") or "").upper()!=kind_key:
+            continue
+
+        # A child is distinct only when BOTH its version and source changed.
+        # Missing legacy identity remains fail-closed; renaming alone cannot
+        # bypass the completed-trial guard.
+        old_version=str(e.get("exact_strategy_version") or "").strip()
+        old_hash=str(e.get("source_sha256") or "").lower()
+        new_version=str(exact_strategy_version or "").strip()
+        new_hash=str(source_sha256 or "").lower()
+        if (old_version and old_hash and new_version and new_hash
+            and old_version!=new_version and old_hash!=new_hash):
             continue
 
         completed.append(e)
@@ -143,6 +158,13 @@ def reserve_trial(
             for e in completed
             if e.get("v3_trial") is not None
         ]
+
+    if exact_strategy_version is not None:
+        row["exact_strategy_version"]=str(exact_strategy_version).strip()
+    if source_file is not None:
+        row["source_file"]=str(source_file).replace("\\", "/")
+    if source_sha256 is not None:
+        row["source_sha256"]=str(source_sha256).lower()
 
     t.setdefault("entries",[]).append(row)
 

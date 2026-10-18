@@ -1,0 +1,41 @@
+{
+  "schema": "B_BOT_RESEARCH_DEVELOPMENT_STATE_V1",
+  "updated_at": "2026-10-18",
+  "repository": "hans1177/bbot-lab",
+  "branch": "research-speed",
+  "base_main": "6b5c9265405a53ba258c3a2e3694f7d21b210977",
+  "research_unblock_main": "63aea437b46d1cc501fa63f1aadb281df5bf8bd0",
+  "status": "IN_PROGRESS_NOT_DEPLOYED",
+  "authorized_scope": [
+    "3 distinct timeframe compute workers; one logical state writer",
+    "bounded 5 hour execution with intermediate remote checkpoints",
+    "resume without overwriting newer state or recomputing completed identities",
+    "basic entry/exit and genetic/meta research allocation within existing policy",
+    "existing final validation and AWS registration gates retained"
+  ],
+  "completed": [
+    "Prepare/compute/finalize boundaries drafted for basic/grammar functions; not connected to parallel controller",
+    "Development checkpoint committed on research-speed",
+    "Main historical research reserve_trial signature mismatch fixed; six identity regression tests; 209 local tests passed"
+  ],
+  "pending": [
+    "Verify main research run 39114847248 and engineering run 39114847224",
+    "Reconcile current policy family 30% share with a 3-worker pool before scheduling",
+    "Single coordinator writes ledgers; compute workers run official run_strategy only",
+    "Remote checkpoint CAS and pending task recovery tests",
+    "Time budget and bounded subprocess timeout/checkpoint margins",
+    "Genetic/basic queue allocation and fixed training data; sealed data excluded",
+    "Exact exit/reentry implementation and parity evidence not yet complete",
+    "Update canonical handoff with final measured tests and actual runs before merge"
+  ],
+  "continuation_rules": [
+    "Fetch latest main and research-speed; preserve other changes",
+    "Do not cancel main scheduled research or reset research-state",
+    "Do not merge WIP compute refactor until concurrency/recovery regression tests pass",
+    "Do not modify operating orders, leverage, tiers, final validation or registration gates",
+    "A stopped chat does not stop GitHub Actions; runner failures can still interrupt jobs",
+    "Existing end-of-job checkpoint is not a guarantee of recovery from arbitrary hard termination; mid-run recovery remains unimplemented"
+  ],
+  "runtime_evidence": "AWS state not inspected in this development snapshot; do not infer current health or candidate count",
+  "future_full_frame_parallelism": "Not yet measured. Keep final/blind stages and state writes serialized; evaluate resources before raising compute concurrency."
+}
