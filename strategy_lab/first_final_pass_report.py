@@ -10,7 +10,7 @@ from collections import Counter
 from pathlib import Path
 
 PIPELINE = "strategy_lab/results/v3/historical_314_pipeline_stage2.json"
-TRAILING = "strategy_lab/results/v3/individual_trailing_optimization_stage3.json"
+TRAILING = "strategy_lab/results/v3/individual_trailing_stage3.json"
 
 
 def read_json(path):
