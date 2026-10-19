@@ -1063,8 +1063,27 @@ def publish_github_feedback(candidates, received_commit):
                 'entry_enabled':entry.get('entry_enabled') is True,
                 'entry_blocked':entry.get('entry_blocked') is True,
                 'locked':entry.get('rollback_requested_to_local') is True})
+    # 배포된 실제 파일의 지문만 확인해 연구실 기준 소스와 비교할 수 있게 한다.
+    import hashlib
+    diag['sources']={}
+    for name in ('collector.py','gate.py','late_entry.py','risk_engine.py','order.py',
+                 'r4_runtime_service.py','r4_user_stream.py','multi_strategy_runtime.py',
+                 'strategy_leg_ledger.py','strategy_runtime.py'):
+        source=BASE/name
+        if source.is_symlink():
+            diag['sources'][name]={'state':'SYMLINK_FORBIDDEN'}
+        elif not source.is_file():
+            diag['sources'][name]={'state':'MISSING'}
+        elif source.stat().st_size>2*1024*1024:
+            diag['sources'][name]={'state':'OVERSIZE'}
+        else:
+            try:
+                diag['sources'][name]={'state':'AVAILABLE','sha256':hashlib.sha256(source.read_bytes()).hexdigest()}
+            except OSError:diag['sources'][name]={'state':'UNAVAILABLE'}
     database=state/'history.db'
     if database.is_symlink():raise RuntimeError('FEEDBACK_LEDGER_SYMLINK')
+    wal=state/'history.db-wal'
+    if wal.is_file() and not wal.is_symlink():diag['ledger']['wal_size_mib']=(wal.stat().st_size+1048575)//1048576
     if database.is_file():
         import sqlite3
         from urllib.parse import quote
