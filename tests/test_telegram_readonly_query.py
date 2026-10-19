@@ -89,6 +89,7 @@ class ReadonlyTelegramQueryTests(unittest.TestCase):
         def fake_api(token, action, payload):
             calls.append((action, payload))
             return data if action == "getUpdates" else {"ok": True}
+        mod._offset_save(self.base / "state" / "telegram_query_offset.json", 0)
         n = mod.poll_once("SECRET_NO_LOG", "123", "123", self.base, api=fake_api)
         self.assertEqual(n, 0)
         self.assertEqual([x[0] for x in calls], ["getUpdates"])
@@ -103,12 +104,27 @@ class ReadonlyTelegramQueryTests(unittest.TestCase):
         def fake_api(token, action, payload):
             calls.append((action, payload))
             return data if action == "getUpdates" else {"ok": True}
+        mod._offset_save(self.base / "state" / "telegram_query_offset.json", 0)
         n = mod.poll_once("SECRET_NO_LOG", "123", "345", self.base, api=fake_api)
         self.assertEqual(n, 1)
         self.assertEqual([x[0] for x in calls], ["getUpdates", "sendMessage"])
         self.assertIn("전체 종료 Leg", calls[1][1]["text"])
         self.assertNotIn("SECRET_NO_LOG", repr(calls[1]))
         self.assertEqual(self.db.read_bytes(), self.original)
+
+    def test_first_poll_skips_stale_message_backlog(self):
+        calls = []
+        data = [{"update_id": 49, "message": {
+            "chat": {"type": "private", "id": 123},
+            "from": {"id": 345, "is_bot": False}, "text": "거래"} }]
+        def fake_api(token, action, payload):
+            calls.append((action, payload))
+            return data
+        n = mod.poll_once("SECRET_NO_LOG", "123", "345", self.base, api=fake_api)
+        self.assertEqual(n, 0)
+        self.assertEqual([x[0] for x in calls], ["getUpdates"])
+        self.assertEqual(calls[0][1]["offset"], -1)
+        self.assertEqual(mod._offset_load(self.base/"state"/"telegram_query_offset.json"), 50)
 
     def test_invalid_cursor_symlink_refused(self):
         offset = self.base/"state"/"telegram_query_offset.json"
