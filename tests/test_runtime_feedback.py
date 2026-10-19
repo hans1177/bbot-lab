@@ -114,6 +114,30 @@ class RuntimeFeedbackTests(unittest.TestCase):
         raw=json.dumps(diag)
         self.assertNotIn('client_order_id',raw)
         self.assertNotIn('API_KEY',raw)
+    def test_positions_are_oldest_first_read_only_and_stale_returns_unknown(self):
+        db=self.state/'history.db';now=int(time.time())
+        with sqlite3.connect(db) as con:
+            con.executescript('''
+                CREATE TABLE r4_active_legs(leg_id TEXT,instance_id TEXT,strategy_id TEXT,strategy_version TEXT,frame TEXT,symbol TEXT,position_side TEXT,owned_qty_units INTEGER,created_ts INTEGER,status TEXT);
+                CREATE TABLE r4_leg_trailing(leg_id TEXT,entry_price_ticks INTEGER,last_price_ticks INTEGER,updated_ts INTEGER);
+                CREATE TABLE r4_fills(id INTEGER,leg_id TEXT,ts INTEGER);
+            ''')
+            con.executemany('INSERT INTO r4_active_legs VALUES(?,?,?,?,?,?,?,?,?,?)',[
+                ('new','i','s','v','1H','BTCUSDT','LONG',1,now-100,'ACTIVE'),
+                ('old','i','s','v','1H','ETHUSDT','SHORT',1,now-1000,'ACTIVE'),
+                ('closed','i','s','v','1H','SOLUSDT','LONG',0,now-5000,'CLOSED')])
+            con.executemany('INSERT INTO r4_leg_trailing VALUES(?,?,?,?)',[
+                ('new',100,90,now-1000),('old',100,110,now)])
+            con.executemany('INSERT INTO r4_fills VALUES(?,?,?)',[(1,'new',now-90),(2,'old',now-900)])
+        before=db.read_bytes();self.call();p=self.payload('DIAGNOSTICS.json')['positions']
+        self.assertEqual([r['leg'] for r in p['rows']],['old','new'])
+        self.assertEqual(p['rows'][0]['unlevered_price_return_pct'],-10)
+        self.assertIsNone(p['rows'][1]['unlevered_price_return_pct'])
+        self.assertGreaterEqual(p['rows'][0]['holding_seconds'],900)
+        self.assertFalse(p['exchange_live_verified'])
+        self.assertFalse(p['rows'][0]['entry_signal_verified'])
+        self.assertEqual(db.read_bytes(),before)
+
     def test_missing_or_invalid_database_is_not_misreported_healthy(self):
         db=self.state/'history.db'
         self.call()
@@ -222,3 +246,4 @@ class FeedbackKeyTests(unittest.TestCase):
         calls.clear();created.clear()
         with self.assertRaisesRegex(RuntimeError,'STOP_AFTER_KEY_CHECK'):ns['install_server_receiver']('a'*40)
         self.assertEqual(created,[]);self.assertFalse(any(command[0]=='ssh' for command,_ in calls))
+
