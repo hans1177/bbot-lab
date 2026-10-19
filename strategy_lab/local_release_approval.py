@@ -496,8 +496,6 @@ def minimal_shadow_pass(version_id, strategy_instance_id=""):
         "state_transition_pass",
         "order_simulation_cost_sanity_pass",
         "strategy_instance_policy_snapshot_pass",
-        "individual_trailing_snapshot_binding_pass",
-        "individual_reentry_snapshot_binding_pass",
         "order_quantity_calculation_pass",
         "duplicate_or_missing_action_integrity_pass",
         "portfolio_allocation_gate_integration_pass",
@@ -506,6 +504,19 @@ def minimal_shadow_pass(version_id, strategy_instance_id=""):
     for key in required_runtime_checks:
         if gate.get(key) is not True:
             return False
+
+    individual_policy_pass = (
+        gate.get("individual_trailing_snapshot_binding_pass") is True
+        and gate.get("individual_reentry_snapshot_binding_pass") is True
+    )
+    legacy_baseline_pass = (
+        gate.get("policy_contract_mode") == "LEGACY_FROZEN_BASELINE_V1"
+        and gate.get("legacy_frozen_baseline_policy_pass") is True
+        and gate.get("individual_trailing_snapshot_binding_pass") is False
+        and gate.get("individual_reentry_snapshot_binding_pass") is False
+    )
+    if not (individual_policy_pass or legacy_baseline_pass):
+        return False
 
     try:
         lifecycle_count = int(
