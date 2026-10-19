@@ -32,6 +32,34 @@ class ExecutionEvidenceTests(unittest.TestCase):
     def rows(self):
         with closing(self.ledger.connect()) as con:
             return [dict(r) for r in con.execute('SELECT * FROM r4_trade_evidence ORDER BY rowid')]
+    def test_tier_leg_capacity_is_order_block_not_loop_exception(self):
+        # 파일명: test_execution_evidence.py / 이미 보유 한도에 도달했을 때 주문 없이 안전하게 차단한다.
+        from multi_strategy_runtime import MultiStrategyRuntime
+        runtime = MultiStrategyRuntime(ledger=self.ledger, exchange=None)
+        try:
+            response = runtime.enter(
+                self.instance, "second-signal", "BTCUSDT", "LONG",
+                10, {"leverage": 10}, 100, tier_leg_limit=1,
+            )
+        finally:
+            runtime.close()
+        self.assertEqual(response["status"], "ENTRY_BLOCKED")
+        self.assertEqual(response["reason"], "TIER_CONCURRENT_LEG_LIMIT:1/1")
+        self.assertEqual(len(self.ledger.pending_intents()), 1)
+
+    def test_invalid_tier_limit_still_raises(self):
+        # 잘못된 설정은 정당한 한도 차단으로 위장하지 않는다.
+        from multi_strategy_runtime import MultiStrategyRuntime
+        runtime = MultiStrategyRuntime(ledger=self.ledger, exchange=None)
+        try:
+            with self.assertRaisesRegex(ValueError, "INVALID_TIER_LEG_LIMIT"):
+                runtime.enter(
+                    self.instance, "second-signal", "BTCUSDT", "LONG",
+                    10, {"leverage": 10}, 100, tier_leg_limit=0,
+                )
+        finally:
+            runtime.close()
+
     def test_rest_stub_then_actual_trade_does_not_double_quantity(self):
         self.ledger.confirm_fill(self.intent['intent_id'],'ORDER:17:CUM:10',10,100,exchange_order_id='17')
         self.assertFalse(self.fill())
