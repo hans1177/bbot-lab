@@ -321,6 +321,46 @@ class ExecutionEvidenceTests(unittest.TestCase):
         return extract('r4_exchange_adapter.py','_normalize_order')(dummy,'BTCUSDT',dict(orderId=17,status='FILLED',executedQty='10',avgPrice='100',side='BUY'))
     def trades(self):
         return [dict(symbol='BTCUSDT',orderId=17,id=1,time=1792140000000,qty='10',price='100',commission='0.1',commissionAsset='USDT',marginAsset='USDT',realizedPnl='0',side='BUY')]
+    def test_r4_long_short_live_order_routing_without_network(self):
+        # 파일명: test_execution_evidence.py / 실제 주문 전송 없이 LONG/SHORT 매핑을 검증한다.
+        # R4 거래소 어댑터의 주문 메서드를 그대로 사용하고 API를 캡처만 한다.
+        calls=[]
+        def fake_order(**kwargs):
+            calls.append(dict(kwargs))
+            return {'status':'NEW','executedQty':'0'}
+        dummy=SimpleNamespace(
+            order=SimpleNamespace(
+                client=SimpleNamespace(new_order=fake_order),
+                safe_call=lambda fn,**kwargs:fn(**kwargs),
+            ),
+            units_to_qty=lambda symbol,units:str(units),
+            _normalize_order=lambda symbol,row:dict(row),
+        )
+        submit=extract('r4_exchange_adapter.py','submit')
+        reduce=extract('r4_exchange_adapter.py','submit_reduce')
+        for position,expected in [('LONG','BUY'),('SHORT','SELL')]:
+            intent={'symbol':'BTCUSDT','position_side':position,
+                    'requested_qty_units':2,'client_order_id':'test_'+position}
+            result=submit(dummy,intent)
+            sent=calls.pop()
+            self.assertEqual(result['status'],'NEW')
+            self.assertEqual(sent['side'],expected)
+            self.assertEqual(sent['type'],'MARKET')
+            self.assertEqual(sent['quantity'],'2')
+            self.assertNotIn('reduceOnly',sent)
+            self.assertNotIn('positionSide',sent)
+        for position,expected in [('LONG','SELL'),('SHORT','BUY')]:
+            leg={'symbol':'BTCUSDT','position_side':position}
+            result=reduce(dummy,leg,2,'exit_'+position)
+            sent=calls.pop()
+            self.assertEqual(result['status'],'NEW')
+            self.assertEqual(sent['side'],expected)
+            self.assertIs(sent['reduceOnly'],True)
+            self.assertEqual(sent['type'],'MARKET')
+            self.assertEqual(sent['quantity'],'2')
+            self.assertNotIn('positionSide',sent)
+        self.assertEqual(calls,[])
+
     def test_rest_exact_trade_cost(self):
         row=self.normalize(self.trades())['fills'][0]
         self.assertEqual(row['fill_id'],'TRADE:1:17');self.assertEqual(row['economic_evidence']['fee_text'],'0.1')
