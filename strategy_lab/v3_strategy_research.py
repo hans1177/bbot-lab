@@ -518,10 +518,16 @@ def _trailing_source_integrity_error(target):
     expected=str(target.get("source_sha256") or "").lower()
     if not rel or not re.fullmatch(r"[0-9a-f]{64}",expected):
         return "TRAILING_EXACT_SOURCE_BINDING_MISSING"
-    source=(ROOT/rel).resolve()
-    if not source.is_relative_to(ROOT.resolve()) or not source.is_file() or source.is_symlink():
+    original=ROOT/rel
+    source=original.resolve()
+    if (original.is_symlink() or not source.is_relative_to(ROOT.resolve())
+        or not source.is_file()):
         return "TRAILING_CANONICAL_SOURCE_UNAVAILABLE"
-    if hashlib.sha256(source.read_bytes()).hexdigest()!=expected:
+    try:
+        digest=hashlib.sha256(source.read_bytes()).hexdigest()
+    except OSError:
+        return "TRAILING_CANONICAL_SOURCE_UNAVAILABLE"
+    if digest!=expected:
         return "TRAILING_EXACT_SOURCE_HASH_MISMATCH"
     return None
 
