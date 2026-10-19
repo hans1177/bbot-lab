@@ -3376,9 +3376,18 @@ old=target.read_bytes();old_sha=hashlib.sha256(old).hexdigest();new=base64.b64de
 if old_sha not in {payload['baseline_sha256'],payload['previous_receiver_sha256'],payload.get('installed_feedback_sha256'),payload['runtime_sha256']}:raise RuntimeError('AWS_RUNTIME_SOURCE_CHANGED')
 if hashlib.sha256(new).hexdigest()!=payload['runtime_sha256']:raise RuntimeError('INSTALL_SOURCE_HASH')
 compile(new,'strategy_runtime.py','exec')
-settings=state/'r4_github_receiver.json';old_settings=settings.read_bytes() if settings.exists() else None
+settings=state/'r4_github_receiver.json'
 if settings.is_symlink():raise RuntimeError('RECEIVER_SETTINGS_SYMLINK')
-config={'enabled':True,'repository':'hans1177/bbot-lab','branch':'runtime-candidates','constitution_hash':'fcf9a69d6100b8638cf031680eef1b5e234ae10edd66f808e2c08631edced76a','engine_sha256':'3c665f886a02757e3b35444b437312385d88790c47c6346e90c64dfc0a5a86ed','code_ref':payload['code_ref'],'automatic_registration_enabled':payload.get('enable_registration') is True,'feedback_enabled':payload.get('enable_feedback') is True}
+old_settings=settings.read_bytes() if settings.exists() else None
+previous_settings=json.loads(old_settings) if old_settings is not None else {}
+if not isinstance(previous_settings,dict):raise RuntimeError('RECEIVER_EXISTING_SETTINGS_INVALID')
+if old_settings is not None and (previous_settings.get('repository')!='hans1177/bbot-lab' or previous_settings.get('branch')!='runtime-candidates' or previous_settings.get('enabled') is not True):
+    raise RuntimeError('RECEIVER_EXISTING_SETTINGS_CONFLICT')
+# 갱신에서는 현재 자동등록·피드백 사용 여부를 유지한다.
+# 새 설치에서만 요청하지 않은 기능을 기본 비활성화한다.
+registration_enabled=previous_settings.get('automatic_registration_enabled') is True or payload.get('enable_registration') is True
+feedback_enabled=previous_settings.get('feedback_enabled') is True or payload.get('enable_feedback') is True
+config={'enabled':True,'repository':'hans1177/bbot-lab','branch':'runtime-candidates','constitution_hash':'fcf9a69d6100b8638cf031680eef1b5e234ae10edd66f808e2c08631edced76a','engine_sha256':'3c665f886a02757e3b35444b437312385d88790c47c6346e90c64dfc0a5a86ed','code_ref':payload['code_ref'],'automatic_registration_enabled':registration_enabled,'feedback_enabled':feedback_enabled}
 unit="""[Unit]
 Description=B-Bot verified GitHub candidate receipt
 After=network-online.target

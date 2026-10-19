@@ -75,6 +75,34 @@ class InstallerTests(unittest.TestCase):
         workflow=yaml.safe_load((ROOT/'.github/workflows/research-run.yml').read_text())
         self.assertEqual(workflow['jobs']['research']['env']['BBOT_LOCAL_ROOT'],'${{ github.workspace }}/cloud-research-workspace')
 
+    def test_receiver_refresh_preserves_live_modes_and_rejects_unrelated_settings(self):
+        source=(ROOT/'strategy_lab/v3_auto_runtime_release.py').read_text()
+        tree=ast.parse(source)
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='install_server_receiver')
+        remote=next(n.value for n in ast.walk(fn) if isinstance(n,ast.Constant) and isinstance(n.value,str) and 'before_pid=service()' in n.value)
+        snippet=remote.split('previous_settings=json.loads(old_settings)',1)[1].split('\nunit=',1)[0]
+        snippet='previous_settings=json.loads(old_settings)'+snippet
+        def check(previous,enable_registration=False,enable_feedback=False):
+            ns={'old_settings':json.dumps(previous).encode() if previous is not None else None,
+                'json':json,'payload':{'code_ref':'f'*40,'enable_registration':enable_registration,'enable_feedback':enable_feedback}}
+            exec(snippet,ns)
+            return ns['config']
+        existing={'enabled':True,'repository':'hans1177/bbot-lab','branch':'runtime-candidates',
+                  'automatic_registration_enabled':True,'feedback_enabled':True}
+        preserved=check(existing)
+        self.assertTrue(preserved['automatic_registration_enabled'])
+        self.assertTrue(preserved['feedback_enabled'])
+        self.assertEqual(preserved['code_ref'],'f'*40)
+        initial=check(None)
+        self.assertFalse(initial['automatic_registration_enabled'])
+        self.assertFalse(initial['feedback_enabled'])
+        activated=check(None,enable_registration=True,enable_feedback=True)
+        self.assertTrue(activated['automatic_registration_enabled'])
+        self.assertTrue(activated['feedback_enabled'])
+        foreign={**existing,'repository':'foreign/project'}
+        with self.assertRaisesRegex(RuntimeError,'EXISTING_SETTINGS_CONFLICT'):
+            check(foreign)
+
     def test_embedded_remote_script_compiles_and_does_not_restart_r4(self):
         source=(ROOT/'strategy_lab/v3_auto_runtime_release.py').read_text();tree=ast.parse(source)
         fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='install_server_receiver')
