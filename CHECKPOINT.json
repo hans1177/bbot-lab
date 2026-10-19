@@ -1,8 +1,8 @@
 {
   "schema": "B_BOT_RESEARCH_CHECKPOINT_V1",
   "release_contract": "FINAL_GATES_THEN_EXISTING_RUNTIME_WORKER_V1",
-  "source_run_id": "39280169105",
-  "source_commit": "846add0cd3078dab003a735503b3b8d725de9ecd",
+  "source_run_id": "39283000189",
+  "source_commit": "0b4e017bf064b3c843d0bcb0ed9a8620c25554fa",
   "engine_sha256": "3c665f886a02757e3b35444b437312385d88790c47c6346e90c64dfc0a5a86ed",
   "input_archives": {
     "start.zip": "ace276261e768dbcb520ebd61208d0425af4e9371028a36449100bfd00971e56",
@@ -4245,12 +4245,12 @@
       "sha256": "a96015555e88a24106cc6ed5ae8dd8f2b0aea4eca6b5dc518e2ffd3ab403eeef"
     },
     "strategy_lab/results/v3/historical_314_pipeline_stage2.json": {
-      "bytes": 798931,
-      "sha256": "1221b00b99b18dff9a41614329a3072e8d88b60811f6c2911c578bf763606989"
+      "bytes": 803167,
+      "sha256": "baed63b2c36de6f7dad98f83ea42df2e44f87e2c45194d8b99f15c0713aaf5ba"
     },
     "strategy_lab/results/v3/individual_reentry_final_risk_stage4.json": {
-      "bytes": 188593,
-      "sha256": "c21a8156a25bbb6e915b349eacdd7b4506459723b8635b334e7f48362a4741ad"
+      "bytes": 192888,
+      "sha256": "7f36efad147ea83a37f7f609e5f3005d4a6357e1b8fcea18ea8a34a19b7bdca1"
     },
     "strategy_lab/results/v3/individual_trailing_stage3.json": {
       "bytes": 277168,
@@ -4293,16 +4293,16 @@
       "sha256": "364339388fa92daa031e12431cae19eacccecce2d70368b0af2a699b1075f668"
     },
     "strategy_lab/results/v3/research_knowledge.json": {
-      "bytes": 6017576,
-      "sha256": "ecd528642faf9edf87c787f78d425c3f087f2df63b6cbb13b5b61293761d9917"
+      "bytes": 6022620,
+      "sha256": "eb0494cc7b76bc8f6c3ad754f63ca70884472d0d3c11b6539c9e54b29d3cf2ce"
     },
     "strategy_lab/results/v3/research_knowledge_runtime.json": {
       "bytes": 1092760,
-      "sha256": "6827679568e9999b8e1f04e681e2845c61d2724634c2fbc8e6c081411bcf1fd9"
+      "sha256": "35f5bf28e5012634452980755ad41cb4608cea2ff169043263985f2c026716c4"
     },
     "strategy_lab/results/v3/roadmap_queue.json": {
-      "bytes": 246872,
-      "sha256": "b36766437f71f7f60612a4ab46e211b47b8f9dee208a7c34bade361d79aee611"
+      "bytes": 247082,
+      "sha256": "3bce9768b95459633884a04922d67a358b0f65c5c0b940521f51b732fec2a74d"
     },
     "strategy_lab/results/v3/runtime_diagnostics.json": {
       "bytes": 9465,
@@ -4317,5 +4317,5 @@
       "sha256": "0dab4d40b40b8d3ade99b0ca6428ae84092dd92fdfdd7055e9ccfb3eb63045c5"
     }
   },
-  "archive_sha256": "3a3be2be26edc83ab81b97e5ca6b1d460a2f0c79c8d7e8f963e7044f72269e00"
+  "archive_sha256": "6498f312a04bdf25942c2307de1ef7ad51cda900fabe3ae4322789ac3e8629cd"
 }
