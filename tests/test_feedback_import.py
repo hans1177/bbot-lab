@@ -11,13 +11,16 @@ class FeedbackImportTests(unittest.TestCase):
         opening=int(time.time()//3600)*3600000-3600000
         self.heartbeat={'schema':'B_BOT_V3_COLLECTOR_HEARTBEAT_V1','updated_at_epoch':time.time()-30,'active_symbols':['BTCUSDT']}
         self.config={'core_symbols':['BTCUSDT']};self.market={'schema':'B_BOT_PUBLIC_CLOSED_BARS_V1','columns':['open_time_ms','open','high','low','close','volume'],'bars':{'BTCUSDT':{'1H':[[opening-(64-i)*3600000,100,102,99,101,10] for i in range(65)]}}}
-        self.stamp=time.time();self.corrupt=False;self.missing=False
+        self.stamp=time.time();self.corrupt=False;self.missing=False;self.diagnostics=None
         ns={'ROOT':self.root,'RESULTS':self.results,'REQUEST':self.request,'Path':Path,'os':os,'json':json,'hashlib':hashlib,'time':time}
         exec(compile(ast.Module(body=[FN],type_ignores=[]),'actual_pull','exec'),ns);self.pull=ns['pull']
     def fetch(self,request,**kwargs):
         self.calls.append(request);path=request.full_url.split('repos/hans1177/bbot-lab',1)[1]
         raw={'CONFIG.json':json.dumps(self.config).encode(),'HEARTBEAT.json':json.dumps(self.heartbeat).encode(),'MARKET.json':json.dumps(self.market).encode()}
         manifest={'schema':'B_BOT_GITHUB_RUNTIME_FEEDBACK_V1','created_at_epoch':self.stamp,'received_commit':'d'*40,'files':{n:{'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()} for n,b in raw.items()}}
+        if self.diagnostics is not None:
+            raw['DIAGNOSTICS.json']=json.dumps(self.diagnostics).encode()
+            manifest['files']['DIAGNOSTICS.json']={'bytes':len(raw['DIAGNOSTICS.json']),'sha256':hashlib.sha256(raw['DIAGNOSTICS.json']).hexdigest()}
         raw['MANIFEST.json']=json.dumps(manifest).encode()
         if self.corrupt:raw['MARKET.json']+=b' '
         names={str(i)*40:n for i,n in enumerate(raw,1)}
@@ -58,6 +61,28 @@ class FeedbackImportTests(unittest.TestCase):
         handoff=workflow.index('      - name: Prepare runtime candidate handoff')
         self.assertLess(research,feedback)
         self.assertLess(feedback,handoff)
+
+    def test_optional_diagnostics_are_imported_without_touching_live_database(self):
+        self.diagnostics={'schema':'B_BOT_RUNTIME_DIAGNOSTICS_V1','created_at_epoch':self.stamp,'host':{},
+                          'modules':{'collector':{'state':'HEARTBEAT_FRESH'},'order':{'state':'NO_DIRECT_EVIDENCE'}},
+                          'ledger':{'state':'MISSING','recent':{}},'errors':{'tags':{}}}
+        result=self.call()
+        self.assertEqual(result['status'],'SERVER_FEEDBACK_IMPORTED')
+        imported=json.loads((self.results/'runtime_diagnostics.json').read_text())
+        self.assertEqual(imported['ledger']['state'],'MISSING')
+        self.assertFalse((self.root/'state/history.db').exists())
+    def test_unexpected_diagnostic_stage_fails_before_writing(self):
+        self.diagnostics={'schema':'B_BOT_RUNTIME_DIAGNOSTICS_V1','created_at_epoch':self.stamp,'host':{},
+                          'modules':{'unknown_stage':{'state':'SERVICE_ACTIVE'}},
+                          'ledger':{'state':'MISSING'},'errors':{}}
+        with self.assertRaisesRegex(RuntimeError,'STAGE_INVALID'):self.call()
+        self.assertFalse((self.results/'runtime_diagnostics.json').exists())
+        self.assertFalse((self.root/'strategy_config.json').exists())
+    def test_diagnostic_secret_field_rejected(self):
+        self.diagnostics={'schema':'B_BOT_RUNTIME_DIAGNOSTICS_V1','created_at_epoch':self.stamp,
+                          'modules':{'order':{'state':'NO_DIRECT_EVIDENCE'}},'ledger':{},'errors':{},'api_key':'reject'}
+        with self.assertRaisesRegex(RuntimeError,'CREDENTIAL_FIELD'):self.call()
+        self.assertFalse((self.root/'strategy_config.json').exists())
 
     def test_existing_request_preserved_without_network_calls(self):
         raw=b'{"approved_for_server_release":true}';self.request.write_bytes(raw);self.assertEqual(self.call()['status'],'WAIT_EXISTING_RUNTIME_REQUEST');self.assertEqual(self.request.read_bytes(),raw);self.assertEqual(self.calls,[])
