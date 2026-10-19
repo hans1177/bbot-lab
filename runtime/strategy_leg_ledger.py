@@ -1833,9 +1833,11 @@ class StrategyLegLedger:
     def pending_exit_intents(self, evidence_only=False, after_id="", limit=4):
         with closing(self.connect()) as con:
             if evidence_only:
+                # 청산 증거는 실제 거래소 체결 원본으로 완전성을 판단한다.
+                # 기존 진입 레버리지 검증 조건은 절대 완화하지 않는다.
+                # 레거시 포지션에 현재 레버리지를 소급해 증명하지 않는다.
                 sql="""SELECT x.*,l.symbol,l.position_side FROM r4_exit_intents x JOIN r4_active_legs l ON l.leg_id=x.leg_id
                     WHERE x.status='FILLED' AND x.filled_qty_units=x.requested_qty_units AND x.filled_qty_units>0
-                    AND l.policy_snapshot LIKE '%verified_exchange_leverage_x%'
                     AND x.exit_intent_id>? AND x.exchange_order_id IS NOT NULL AND x.exchange_order_id<>''
                     AND (SELECT COALESCE(SUM(e.qty_units),0) FROM r4_trade_evidence e
                         WHERE e.leg_id=x.leg_id AND e.kind='EXIT_FILL' AND e.trade_id<>''
