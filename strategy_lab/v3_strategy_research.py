@@ -753,9 +753,16 @@ def _trailing_frozen_results_error(target, item):
             except (TypeError,ValueError,OverflowError):
                 return "TRAILING_FROZEN_PAIR_MISMATCH"
             rel=str(row.get("result_json") or "").replace("\\","/")
-            if not rel or not rel.startswith("strategy_lab/results/v3/"):
+            # run_strategy.py writes its immutable JSON into LAB/results/,
+            # NOT LAB/results/v3/ (which holds Stage3 state). Restrict frozen
+            # trial reads to this exact canonical output directory.
+            candidate=Path(rel)
+            if (candidate.is_absolute() or len(candidate.parts)!=3
+                or candidate.parts[:2]!=("strategy_lab","results")
+                or not candidate.name.endswith(".json")
+                or ".." in candidate.parts or "." in candidate.parts):
                 return "TRAILING_FROZEN_RESULT_PATH_INVALID"
-            path=ROOT/rel
+            path=ROOT/candidate
             if (path.is_symlink() or not path.resolve().is_relative_to(ROOT.resolve())
                 or not path.is_file()):
                 return "TRAILING_FROZEN_RESULT_MISSING"

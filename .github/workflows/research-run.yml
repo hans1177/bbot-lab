@@ -4,7 +4,13 @@ name: Research runtime
 on:
   push:
     branches: [main]
-    paths: ['.github/workflows/research-run.yml']
+    # Resume bounded cloud research after verified pipeline fixes reach main.
+    # The existing concurrency lock serializes runs and never cancels evidence.
+    paths:
+      - '.github/workflows/research-run.yml'
+      - 'strategy_lab/v3_strategy_research.py'
+      - 'strategy_lab/research_controller.py'
+      - 'strategy_lab/v3_auto_runtime_release.py'
   workflow_dispatch:
     inputs:
       cycles:

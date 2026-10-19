@@ -114,6 +114,25 @@ class FirstFinalPassReportTests(unittest.TestCase):
         self.assertEqual(before,{p: p.read_bytes() for p in self.root.rglob("*")
                                  if p.is_file()})
 
+    def test_cloud_research_resumes_on_p0_source_merge_without_cancel(self):
+        import yaml
+        flow=yaml.safe_load((ROOT / ".github/workflows/research-run.yml").read_text())
+        trigger=flow.get("on",flow.get(True))
+        self.assertIn("schedule",trigger)
+        self.assertIn("push",trigger)
+        self.assertEqual(trigger["push"]["branches"],["main"])
+        changed=set(trigger["push"]["paths"])
+        self.assertIn("strategy_lab/v3_strategy_research.py",changed)
+        self.assertIn("strategy_lab/research_controller.py",changed)
+        self.assertIn("strategy_lab/v3_auto_runtime_release.py",changed)
+        self.assertEqual(flow["concurrency"]["group"],"research-runtime-single-worker")
+        self.assertIs(flow["concurrency"]["cancel-in-progress"],False)
+        self.assertEqual(flow["jobs"]["research"]["env"]["B_BOT_V3_SERVER_PUSH_HOLD"],"1")
+        steps=flow["jobs"]["research"]["steps"]
+        research=next(step for step in steps if step.get("name")=="Run existing research controller")
+        self.assertIn("--time-budget-seconds 18000",research["run"])
+        self.assertIn("--max-cycles",research["run"])
+
     def test_actual_workflow_scheduled_with_report_after_export(self):
         import yaml
         flow=yaml.safe_load((ROOT / ".github/workflows/research-run.yml").read_text())
