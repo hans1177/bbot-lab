@@ -1042,7 +1042,25 @@ def publish_github_feedback(candidates, received_commit):
     observed('market','CLOSED_BARS_VALIDATED',symbols=len(market['bars']),frames=sorted(frames))
     active=diag['services']['r4-runtime.service']=='ACTIVE'
     legacy=diag['services']['runner.service']=='ACTIVE'
-    observed('runtime','CONFLICT' if active and legacy else 'SERVICE_ACTIVE' if active else 'SERVICE_INACTIVE' if diag['services']['r4-runtime.service']=='INACTIVE' else 'UNKNOWN')
+    # 파일명: strategy_runtime.py / 기존 읽기 전용 피드백에서 systemd 재시작 정책만 관찰한다.
+    # 서비스나 웹소켓을 시작/중지/재시작하지 않으며, 읽기 실패를 자동복구 정상으로 판정하지 않는다.
+    restart_policy='UNKNOWN'
+    try:
+        restart_info=subprocess.run(
+            ['systemctl','show','r4-runtime.service','-p','Restart','--value'],
+            capture_output=True,text=True,timeout=2,
+        )
+        if restart_info.returncode==0:
+            observed_policy=str(restart_info.stdout or '').strip()
+            if observed_policy in {'no','always','on-failure','on-abnormal','on-abort','on-watchdog','on-success'}:
+                restart_policy=observed_policy
+    except (OSError,subprocess.TimeoutExpired):
+        pass
+    observed(
+        'runtime',
+        'CONFLICT' if active and legacy else 'SERVICE_ACTIVE' if active else 'SERVICE_INACTIVE' if diag['services']['r4-runtime.service']=='INACTIVE' else 'UNKNOWN',
+        systemd_restart_policy=restart_policy,
+    )
     observed('websocket','NO_DIRECT_HEARTBEAT')
     observed('signal','NO_DIRECT_EVIDENCE')
     observed('risk','NO_DIRECT_EVIDENCE')
