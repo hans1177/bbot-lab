@@ -184,6 +184,40 @@ class ExecutionEvidenceTests(unittest.TestCase):
         self.assertEqual(len(calls),1)
         self.assertEqual(target['status'],'INTENT_SAVED')
 
+    def test_legacy_exit_four_exchange_trades_bind_without_double_close(self):
+        from multi_strategy_runtime import MultiStrategyRuntime
+        self.legacy_exit_stub()
+        before=self.ledger.get_leg(self.intent['leg_id'])
+        fills=[]
+        cumulative=0
+        for trade_id,amount in [('31',2),('32',3),('33',1),('34',4)]:
+            cumulative+=amount
+            ev=self.ev(tid=trade_id,qty=amount,cum=cumulative)
+            ev.update(order_id='19',source_event_id='TRADE:'+trade_id+':19',
+                      price_text='110',realized_pnl_text='0')
+            fills.append(dict(fill_id='TRADE:'+trade_id+':19',
+                              qty_units=amount,price_ticks=110,fee_text='0.1',
+                              fee_asset='USDT',realized_pnl_text='0',
+                              economic_evidence=ev))
+        exchange=SimpleNamespace(query_by_client_order_id=lambda *args:
+            dict(found=True,exchange_order_id='19',cumulative_qty_units=10,fills=fills))
+        runtime=MultiStrategyRuntime.__new__(MultiStrategyRuntime)
+        runtime.ledger=self.ledger
+        runtime.exchange=exchange
+        result=runtime.recover_pending(evidence_only=True)
+        self.assertEqual([x['action'] for x in result],['ECONOMIC_EVIDENCE_CHECKED'])
+        self.assertEqual(self.ledger.get_leg(self.intent['leg_id']),before)
+        with closing(self.ledger.connect()) as con:
+            result=con.execute(
+                "SELECT COUNT(*),COALESCE(SUM(qty_units),0) FROM r4_trade_evidence "
+                "WHERE kind='EXIT_FILL' AND evidence_complete=1"
+            ).fetchone()
+            self.assertEqual(tuple(result),(4,10))
+            self.assertEqual(con.execute(
+                "SELECT COUNT(*) FROM r4_leg_events WHERE event_type='EXIT_FILL'"
+            ).fetchone()[0],1)
+        self.assertEqual(self.ledger.pending_exit_intents(evidence_only=True),[])
+
     def test_legacy_exit_recovery_rejects_exchange_quantity_conflict(self):
         from multi_strategy_runtime import MultiStrategyRuntime
         self.legacy_exit_stub()
