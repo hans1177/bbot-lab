@@ -512,6 +512,45 @@ def _ensure_stage3_entry(stage3,target):
     return item
 
 
+def _trailing_result_binding_error(report, target, pair, source):
+    """Require exact source and selected pair in every completed trailing result.
+
+    A malformed or mismatched result is candidate-local FAIL, never a valid
+    measurement and never a crash that stops the whole scheduled research run.
+    """
+    if not isinstance(report, dict):
+        return "TRAILING_RESULT_INVALID"
+    original=str(report.get("strategy_file") or "")
+    if not original:
+        return "TRAILING_RESULT_SOURCE_MISSING"
+    path=Path(original)
+    if not path.is_absolute():
+        path=ROOT/path
+    try:
+        if path.resolve()!=source.resolve():
+            return "TRAILING_RESULT_SOURCE_MISMATCH"
+    except (ValueError,OSError,RuntimeError):
+        return "TRAILING_RESULT_SOURCE_MISMATCH"
+    values=report.get("individual_trailing_research")
+    if not isinstance(values, dict):
+        return "TRAILING_RESULT_CONFIG_MISSING"
+    try:
+        measured_start=float(values.get("start_pct"))
+        measured_callback=float(values.get("callback_pct"))
+        selected_start=float(pair.get("start_pct"))
+        selected_callback=float(pair.get("callback_pct"))
+    except (ValueError,TypeError,OverflowError):
+        return "TRAILING_RESULT_CONFIG_INVALID"
+    if not all(math.isfinite(n) for n in (
+        measured_start,measured_callback,selected_start,selected_callback,
+    )):
+        return "TRAILING_RESULT_CONFIG_INVALID"
+    if (abs(measured_start-selected_start)>1e-12
+        or abs(measured_callback-selected_callback)>1e-12):
+        return "TRAILING_RESULT_CONFIG_MISMATCH"
+    return None
+
+
 def _trailing_source_integrity_error(target):
     """Fail closed before measuring or selecting an exact-version trailing policy."""
     rel=str(target.get("canonical_source_file") or "").replace("\\","/")
@@ -641,9 +680,20 @@ def _run_trailing_pair(state,target,stage3,item,pair,phase):
         knowledge.complete_trial(trial,"RESULT_NOT_FOUND","FAIL","UNKNOWN")
         return {"status":"FAIL","reason":"RESULT_NOT_FOUND","pair":pair,"trial":trial,"phase":phase}
     report=load(result,{})
-    trailing_meta=report.get("individual_trailing_research") or {}
-    if abs(float(trailing_meta.get("start_pct"))-float(pair.get("start_pct")))>1e-12 or abs(float(trailing_meta.get("callback_pct"))-float(pair.get("callback_pct")))>1e-12:
-        raise RuntimeError("TRAILING_RESULT_CONFIG_MISMATCH")
+    binding_error=_trailing_result_binding_error(report,target,pair,source)
+    if binding_error is None:
+        binding_error=_trailing_source_integrity_error(target)
+    if binding_error:
+        done[key]={
+            "status":"INVALID_RESULT_BINDING",
+            "reason":binding_error,
+            "start_pct":pair.get("start_pct"),
+            "callback_pct":pair.get("callback_pct"),
+            "trial":trial,
+            "result_json":str(result.relative_to(ROOT)).replace("\\","/"),
+        }
+        knowledge.complete_trial(trial,binding_error,"FAIL","UNKNOWN")
+        return _block_trailing_source_drift(state,target,stage3,item,binding_error)
     evidence=_trailing_evidence(report,tf)
     done[key]={
         "status":"MEASURED",

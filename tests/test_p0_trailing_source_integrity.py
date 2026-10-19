@@ -2,6 +2,8 @@
 import ast
 import hashlib
 import json
+import math
+import os
 import re
 import tempfile
 import unittest
@@ -36,8 +38,8 @@ class ExactTrailingSourceIntegrityTests(unittest.TestCase):
             record_result=lambda *a,**kw:self.records.append((a,kw)),
             reserve_trial=lambda *a,**kw:self.fail("MUST_NOT_RESERVE_ON_SOURCE_DRIFT"),
         )
-        ns={"ROOT":self.root,"TRAILING_STAGE3":self.root/"stage3.json",
-            "re":re,"hashlib":hashlib,
+        ns={"ROOT":self.root,"Path":Path,"TRAILING_STAGE3":self.root/"stage3.json",
+            "re":re,"hashlib":hashlib,"math":math,
             "now":lambda:"2026-10-19T00:00:00Z",
             "atomic":lambda path,row:self.saved.append(("stage3",json.loads(json.dumps(row)))),
             "_save_historical_stage2":lambda row:self.saved.append(("pipeline",json.loads(json.dumps(row)))),
@@ -45,7 +47,8 @@ class ExactTrailingSourceIntegrityTests(unittest.TestCase):
             "policy_research":SimpleNamespace(research_exit=lambda *a,**kw:self.fail("SHOULD_NOT_SELECT")),
             "str":str}
         tree=ast.parse((REPO/"strategy_lab/v3_strategy_research.py").read_text(encoding="utf-8-sig"))
-        names={"_trailing_source_integrity_error",
+        names={"_trailing_result_binding_error",
+               "_trailing_source_integrity_error",
                "_block_trailing_source_drift",
                "_run_trailing_pair",
                "_finalize_trailing_selection"}
@@ -53,6 +56,73 @@ class ExactTrailingSourceIntegrityTests(unittest.TestCase):
         self.assertEqual(set(n.name for n in funcs),names)
         exec(compile(ast.Module(body=funcs,type_ignores=[]),"isolated_exact_trailing","exec"),ns)
         self.ns=ns
+
+    def simulated_report_run(self, report):
+        """Run only the isolated result-binding segment; no real backtest."""
+        completed=[]
+        self.knowledge.reserve_trial=lambda *args,**kw:17
+        self.knowledge.complete_trial=lambda *args:completed.append(args)
+        self.ns.update({
+            "os":os,
+            "sys":SimpleNamespace(executable="python"),
+            "RUNNER":self.root/"strategy_lab/run_strategy.py",
+            "hard_pass_dates":lambda:("2016-01-01","2024-12-31"),
+            "_trailing_pair_key":lambda *args:"PAIR",
+            "time":SimpleNamespace(time=lambda:1.0),
+            "subprocess":SimpleNamespace(PIPE=-1,STDOUT=-2,run=lambda *args,**kw:SimpleNamespace(returncode=0,stdout="")),
+            "find_result":lambda *args:self.root/"strategy_lab/results/v3/synthetic.json",
+            "load":lambda *args:report,
+            "_trailing_evidence":lambda *args:{"trades":500,"expectancy_pct":0.1},
+        })
+        result=self.ns["_run_trailing_pair"](
+            self.state,self.target,self.stage3,self.item,
+            {"start_pct":3.0,"callback_pct":1.0},"FINE")
+        return result,completed
+
+    def good_report(self):
+        return {"strategy_file":str(self.source),
+                "individual_trailing_research":{"start_pct":3.0,"callback_pct":1.0}}
+
+    def test_valid_source_and_pair_are_recorded_as_measured(self):
+        result,completed=self.simulated_report_run(self.good_report())
+        self.assertEqual(result["status"],"MEASURED")
+        self.assertEqual(self.item["fine_results"]["PAIR"]["status"],"MEASURED")
+        self.assertEqual(self.target["pipeline_stage"],"INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING")
+        self.assertEqual(completed[0][2],"MEASURED")
+
+    def test_mismatched_report_source_does_not_advance_candidate(self):
+        report=self.good_report()
+        report["strategy_file"]=str(self.root/"other_source.py")
+        result,completed=self.simulated_report_run(report)
+        self.assertEqual(result["reason"],"TRAILING_RESULT_SOURCE_MISMATCH")
+        self.assertEqual(self.item["fine_results"]["PAIR"]["status"],"INVALID_RESULT_BINDING")
+        self.assertEqual(completed[0][2],"FAIL")
+        self.assertEqual(self.target["pipeline_stage"],"INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE")
+
+    def test_report_missing_trailing_metadata_isolated_not_exception(self):
+        report=self.good_report()
+        report.pop("individual_trailing_research")
+        result,completed=self.simulated_report_run(report)
+        self.assertEqual(result["reason"],"TRAILING_RESULT_CONFIG_MISSING")
+        self.assertEqual(completed[0][2],"FAIL")
+
+    def test_malformed_and_nonfinite_metadata_isolated(self):
+        for wrong in ("bad",float("nan"),None):
+            with self.subTest(wrong=repr(wrong)):
+                # Reinitialize fixtures to verify no repeated state leakage.
+                self.setUp()
+                report=self.good_report()
+                report["individual_trailing_research"]["callback_pct"]=wrong
+                result,completed=self.simulated_report_run(report)
+                self.assertEqual(result["reason"],"TRAILING_RESULT_CONFIG_INVALID")
+                self.assertEqual(completed[0][2],"FAIL")
+
+    def test_report_pair_mismatch_isolated_not_runtime_crash(self):
+        report=self.good_report()
+        report["individual_trailing_research"]["start_pct"]=4.0
+        result,completed=self.simulated_report_run(report)
+        self.assertEqual(result["reason"],"TRAILING_RESULT_CONFIG_MISMATCH")
+        self.assertEqual(completed[0][2],"FAIL")
 
     def test_exact_file_has_no_integrity_error(self):
         self.assertIsNone(self.ns["_trailing_source_integrity_error"](self.target))
