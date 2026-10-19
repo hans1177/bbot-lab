@@ -645,11 +645,26 @@ def _run_trailing_pair(state,target,stage3,item,pair,phase):
     env["BBOT_RESEARCH_TRAILING_START_PCT"]=str(pair.get("start_pct"))
     env["BBOT_RESEARCH_TRAILING_CALLBACK_PCT"]=str(pair.get("callback_pct"))
     started=time.time()
-    p=subprocess.run(
-        [sys.executable,str(RUNNER),str(source)],
-        cwd=str(ROOT),env=env,text=True,encoding="utf-8",errors="replace",
-        stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
-    )
+    try:
+        # Bound every subprocess like the existing three-worker compute pool:
+        # a stalled exact-version trial cannot block unattended GitHub research.
+        p=subprocess.run(
+            [sys.executable,str(RUNNER),str(source)],
+            cwd=str(ROOT),env=env,text=True,encoding="utf-8",errors="replace",
+            stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=1800,
+        )
+    except subprocess.TimeoutExpired:
+        field="coarse_results" if phase=="COARSE" else "fine_results"
+        key=_trailing_pair_key(pair.get("start_pct"),pair.get("callback_pct"))
+        item.setdefault(field,{})[key]={
+            "status":"RUNTIME_FAIL",
+            "reason":"TRAILING_RUN_TIMEOUT",
+            "start_pct":pair.get("start_pct"),
+            "callback_pct":pair.get("callback_pct"),
+            "trial":trial,
+        }
+        knowledge.complete_trial(trial,"TRAILING_RUN_TIMEOUT","FAIL","UNKNOWN")
+        return _block_trailing_source_drift(state,target,stage3,item,"TRAILING_RUN_TIMEOUT")
     field="coarse_results" if phase=="COARSE" else "fine_results"
     done=item.setdefault(field,{})
     key=_trailing_pair_key(pair.get("start_pct"),pair.get("callback_pct"))
