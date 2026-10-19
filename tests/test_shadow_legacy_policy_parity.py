@@ -85,6 +85,7 @@ class ShadowLegacyPolicyParityTests(unittest.TestCase):
             ROOT / "strategy_lab/v3_shadow_engine.py",
             {
                 "_bundle_version_from_snapshot",
+                "_policy_behavior_from_snapshot",
                 "_legacy_frozen_baseline_policy_pass",
                 "_strategy_instance_policy_snapshot_check",
                 "shadow_pass_from_gate",
@@ -129,6 +130,77 @@ class ShadowLegacyPolicyParityTests(unittest.TestCase):
             "replay_dryrun_state_transition_pass": True,
             "live_closed_bar_confirmation_pass": True,
         }
+
+    def flat_snapshot(self):
+        """Represent the original migrated R4 CANARY schema exactly, not as a fabricated optimized policy."""
+        self.snapshot = {
+            "policy_versions": self.snapshot["policy_versions"],
+            "trailing": self.behavior["trailing"],
+            "state_reentry": self.behavior["state_reentry"],
+            "opposite_exit": self.behavior["opposite_exit"],
+            "opposite_reopen": self.behavior["opposite_reopen"],
+            "v3_decision": {"dynamic_trailing": False},
+        }
+        self.request["strategy_policy_snapshot"] = self.snapshot
+        self.request["strategy_policy_bundle_version"] = self.bundle()
+        self.instance["policy_snapshot"] = self.snapshot
+        self.instance["strategy_policy_bundle_version"] = self.bundle()
+
+    def test_flat_migrated_canary_checks_frozen_policy_without_new_credit(self):
+        self.flat_snapshot()
+        passed, detail = self.evidence()
+        self.assertTrue(passed, detail)
+        self.assertEqual(detail["policy_contract_mode"], "LEGACY_FROZEN_BASELINE_V1")
+        self.assertFalse(detail["trailing_binding_pass"])
+        self.assertFalse(detail["reentry_binding_pass"])
+        self.assertTrue(self.pass_gate(self.gate(detail)))
+
+    def test_flat_provisional_canary_requires_blind_provenance(self):
+        self.flat_snapshot()
+        self.instance["evidence"] = {
+            "source": "V3_DEPLOYMENT_CREATE_PROVISIONAL",
+            "full_validation_pass": True, "sealed_blind_pass": True,
+        }
+        self.instance["career"][0]["evidence"]["reason"] = "MINIMAL_SHADOW_RUNTIME_GATE_PASS"
+        self.assertTrue(self.evidence()[0])
+        self.instance["evidence"]["full_validation_pass"] = False
+        self.assertFalse(self.evidence()[0])
+
+    def test_flat_snapshot_policy_drift_rejected(self):
+        self.flat_snapshot()
+        self.config["trailing"]["start_pct"] = 10
+        self.assertFalse(self.evidence()[0])
+
+    def test_flat_snapshot_bundle_hash_mismatch_rejected(self):
+        self.flat_snapshot()
+        self.instance["strategy_policy_bundle_version"] = "PB_INVALID"
+        self.assertFalse(self.evidence()[0])
+
+    def test_flat_snapshot_new_main_cannot_use_legacy_parity(self):
+        self.flat_snapshot()
+        self.request["pipeline_contract"] = "NEW_MAIN_LOCAL_SHADOW_V1"
+        self.assertFalse(self.evidence()[0])
+
+    def test_flat_snapshot_individual_binding_cannot_sneak_through(self):
+        self.flat_snapshot()
+        self.behavior["trailing"]["individual_strategy_binding"] = True
+        self.config["trailing"]["individual_strategy_binding"] = True
+        self.request["strategy_policy_bundle_version"] = self.bundle()
+        self.instance["strategy_policy_bundle_version"] = self.bundle()
+        self.assertFalse(self.evidence()[0])
+
+    def test_flat_and_nested_mixed_payload_is_rejected(self):
+        self.flat_snapshot()
+        self.snapshot["behavior_policy"] = self.behavior
+        self.request["strategy_policy_bundle_version"] = self.bundle()
+        self.instance["strategy_policy_bundle_version"] = self.bundle()
+        self.assertFalse(self.evidence()[0])
+
+    def test_malformed_nested_payload_does_not_fall_back_to_flat(self):
+        self.snapshot["behavior_policy"] = "corrupt"
+        self.request["strategy_policy_bundle_version"] = self.bundle()
+        self.instance["strategy_policy_bundle_version"] = self.bundle()
+        self.assertFalse(self.evidence()[0])
 
     def test_historical_migration_checks_baseline_without_individual_credit(self):
         passed, detail = self.evidence()
