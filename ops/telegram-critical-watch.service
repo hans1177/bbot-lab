@@ -13,7 +13,9 @@ TimeoutStartSec=40
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/home/ec2-user/bot/state
+# reservation.py opens its existing runner.log during a read-only import.
+# Keep write access limited to the telemetry cursor and existing log directory.
+ReadWritePaths=/home/ec2-user/bot/state /home/ec2-user/bot/logs
 
 [Install]
 WantedBy=multi-user.target
