@@ -1,0 +1,19 @@
+[Unit]
+Description=B-Bot independent read-only R4 critical Telegram alert probe
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/home/ec2-user/bot
+ExecStart=/home/ec2-user/bot/venv/bin/python -B /home/ec2-user/bot/telegram_critical_watch.py --check
+TimeoutStartSec=40
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/ec2-user/bot/state
+
+[Install]
+WantedBy=multi-user.target
