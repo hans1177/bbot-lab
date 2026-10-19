@@ -1013,8 +1013,125 @@ def publish_github_feedback(candidates, received_commit):
     for symbol,items in market['bars'].items():
         for frame,rows in items.items():
             if not 0<=stamp-(rows[-1][0]/1000+intervals[frame])<=max(21600,2.2*intervals[frame]):raise RuntimeError('FEEDBACK_CACHED_BAR_STALE')
-    payloads={'HEARTBEAT.json':json.dumps(heartbeat,sort_keys=True).encode(),'MARKET.json':json.dumps(market,sort_keys=True,allow_nan=False).encode(),'CONFIG.json':config_raw}
-    manifest={'schema':'B_BOT_GITHUB_RUNTIME_FEEDBACK_V1','received_commit':received_commit,'created_at_epoch':stamp,'files':{name:{'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()} for name,raw in payloads.items()},'database_opened':False,'orders_touched':False,'symbols':sorted(symbols),'timeframes':sorted(frames)}
+    # ================= 서버 종단간 진단: 읽기 전용 =================
+    # 정확한 거래 상태는 관찰된 증거만 표시한다. 원본 로그·주문 ID·체결 ID·DB는 업로드하지 않는다.
+    diag={
+        'schema':'B_BOT_RUNTIME_DIAGNOSTICS_V1','created_at_epoch':int(stamp),
+        'host':{'load_1m':None,'memory_available_mib':None,'disk_free_mib':None},
+        'services':{},'modules':{},
+        'ledger':{'state':'MISSING','size_mib':0,'recent':{},'instances':[],'mismatched_baskets':None},
+        'errors':{'recent_warning_error_lines':0,'tags':{}},
+    }
+    def observed(stage,state_name,**facts):
+        diag['modules'][stage]={'state':state_name,**facts}
+    try:diag['host']['load_1m']=round(os.getloadavg()[0],2)
+    except (OSError,AttributeError):pass
+    try:
+        match=re.search(r'^MemAvailable:\s+(\d+)\s+kB',Path('/proc/meminfo').read_text(encoding='utf-8')[:8192],re.MULTILINE)
+        if match:diag['host']['memory_available_mib']=int(match.group(1))//1024
+    except OSError:pass
+    try:
+        vfs=os.statvfs(BASE);diag['host']['disk_free_mib']=(vfs.f_bavail*vfs.f_frsize)//1048576
+    except OSError:pass
+    for unit in ('r4-runtime.service','runner.service','bbot-github-receive.timer','collector.service'):
+        try:
+            status=subprocess.run(['systemctl','is-active','--quiet',unit],capture_output=True,timeout=2)
+            diag['services'][unit]='ACTIVE' if status.returncode==0 else 'INACTIVE'
+        except (OSError,subprocess.TimeoutExpired):diag['services'][unit]='UNKNOWN'
+    observed('collector','HEARTBEAT_FRESH',heartbeat_age_sec=round(stamp-float(heartbeat['updated_at_epoch']),1),active_symbols=len(heartbeat.get('active_symbols') or []))
+    observed('market','CLOSED_BARS_VALIDATED',symbols=len(market['bars']),frames=sorted(frames))
+    active=diag['services']['r4-runtime.service']=='ACTIVE'
+    legacy=diag['services']['runner.service']=='ACTIVE'
+    observed('runtime','CONFLICT' if active and legacy else 'SERVICE_ACTIVE' if active else 'SERVICE_INACTIVE' if diag['services']['r4-runtime.service']=='INACTIVE' else 'UNKNOWN')
+    observed('websocket','NO_DIRECT_HEARTBEAT')
+    observed('signal','NO_DIRECT_EVIDENCE')
+    observed('risk','NO_DIRECT_EVIDENCE')
+    observed('order','NO_DIRECT_EVIDENCE')
+    observed('entry_fill','NO_DIRECT_EVIDENCE')
+    observed('exit','NO_DIRECT_EVIDENCE')
+    observed('exit_fill','NO_DIRECT_EVIDENCE')
+    observed('recovery','NO_DIRECT_EVIDENCE')
+    observed('storage','NO_DIRECT_EVIDENCE')
+    config_instances=(config.get('r4_runtime') or {}).get('strategy_instances') or {}
+    for iid,entry in list(config_instances.items())[:64]:
+        if not isinstance(entry,dict):continue
+        fields=(iid,entry.get('strategy_id'),entry.get('timeframe'),entry.get('tier'))
+        if all(isinstance(x,str) and re.fullmatch('[A-Za-z0-9_.:-]{1,160}',x) for x in fields):
+            diag['ledger']['instances'].append({
+                'instance':iid,'strategy':fields[1],'frame':fields[2],'tier':fields[3],
+                'enabled':entry.get('enabled') is True,
+                'entry_enabled':entry.get('entry_enabled') is True,
+                'entry_blocked':entry.get('entry_blocked') is True,
+                'locked':entry.get('rollback_requested_to_local') is True})
+    database=state/'history.db'
+    if database.is_symlink():raise RuntimeError('FEEDBACK_LEDGER_SYMLINK')
+    if database.is_file():
+        import sqlite3
+        from urllib.parse import quote
+        diag['ledger']['size_mib']=(database.stat().st_size+1048575)//1048576
+        diag['ledger']['state']='UNAVAILABLE'
+        connection=None
+        try:
+            # WAL 원본을 수정하거나 체크포인트·VACUUM하지 않는다.
+            connection=sqlite3.connect('file:'+quote(str(database),safe='/')+'?mode=ro',uri=True,timeout=0.2)
+            connection.execute('PRAGMA query_only=ON')
+            tables={x[0] for x in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'r4_%'")}
+            sources=(
+                ('r4_order_intents','order','status','id','updated_ts'),
+                ('r4_exit_intents','exit','status','id','updated_ts'),
+                ('r4_fills','entry_fill','fill','id','ts'),
+                ('r4_leg_events','exit_fill','event_type','id','ts'),
+                ('r4_trade_evidence','storage','kind','id','ts'),
+                ('r4_reconciliation_events','recovery','result','id','ts'),
+                ('r4_hard_safety_events','risk','action','id','ts'),
+                ('r4_tier_performance_evaluations','tier','action','id','ts'),
+            )
+            for table,stage,column,index,clock in sources:
+                if table not in tables:continue
+                records=list(connection.execute('SELECT '+('1' if column=='fill' else column)+','+clock+' FROM '+table+' ORDER BY '+index+' DESC LIMIT 96'))
+                counts={};last=0
+                for label,when in records:
+                    if column=='fill':label='RECORDED'
+                    if isinstance(label,str) and re.fullmatch('[A-Z_]{1,48}',label):
+                        counts[label]=counts.get(label,0)+1
+                    if isinstance(when,int):last=max(last,when)
+                diag['ledger']['recent'][stage]={'sample_size':len(records),'by_type':counts,'latest_ts':last}
+                observed(stage,'EVIDENCE_PRESENT' if records else 'NO_RECENT_RECORD',sample_size=len(records),last_event_ts=last)
+            if 'r4_basket_snapshots' in tables:
+                baskets=list(connection.execute('SELECT mismatch FROM r4_basket_snapshots LIMIT 64'))
+                diag['ledger']['mismatched_baskets']={'checked':len(baskets),'mismatch':sum(bool(x[0]) for x in baskets)}
+                if any(x[0] for x in baskets):observed('recovery','BASKET_MISMATCH',sample_size=len(baskets))
+            if 'r4_trade_evidence' in tables:
+                proofs=list(connection.execute('SELECT kind,evidence_complete,hard_fail FROM r4_trade_evidence ORDER BY id DESC LIMIT 96'))
+                diag['ledger']['proofs']={'sample_size':len(proofs),'incomplete':sum(not bool(x[1]) for x in proofs),'hard_fail':sum(bool(x[2]) for x in proofs)}
+                if any(x[2] for x in proofs):observed('storage','HARD_FAIL_EVIDENCE',sample_size=len(proofs))
+            diag['ledger']['state']='READ_ONLY_OK'
+            if not tables:diag['ledger']['state']='NO_R4_TABLES'
+            if diag['modules']['storage']['state']=='NO_DIRECT_EVIDENCE':observed('storage','DATABASE_READABLE')
+        except (sqlite3.DatabaseError,OSError,TypeError,ValueError):
+            diag['ledger']['state']='UNAVAILABLE'
+            diag['ledger']['recent']={}
+            diag['ledger'].pop('proofs',None)
+            observed('storage','DATABASE_READ_FAILED')
+        finally:
+            if connection is not None:connection.close()
+    log=BASE/'logs/runner.log'
+    if log.is_file() and not log.is_symlink():
+        try:
+            with log.open('rb') as fh:
+                fh.seek(max(0,fh.seek(0,2)-65536))
+                tail=fh.read(65536).decode('utf-8',errors='replace')
+            for row in tail.splitlines()[-400:]:
+                if '[ERROR]' in row or '[WARNING]' in row or 'Traceback' in row:diag['errors']['recent_warning_error_lines']+=1
+                match=re.search(r'\[주문\](?:\[R4\])?\[([A-Z_]{3,48})\]',row)
+                if match and any(term in match.group(1) for term in ('FAIL','ERROR','LOCK','RECON','WS_','BLOCK')):
+                    tags=diag['errors']['tags'];tag=match.group(1)
+                    if tag in tags or len(tags)<32:tags[tag]=tags.get(tag,0)+1
+        except OSError:pass
+    diag_raw=json.dumps(diag,sort_keys=True,allow_nan=False).encode()
+    if len(diag_raw)>128*1024:raise RuntimeError('FEEDBACK_DIAGNOSTIC_LIMIT')
+    payloads={'HEARTBEAT.json':json.dumps(heartbeat,sort_keys=True).encode(),'MARKET.json':json.dumps(market,sort_keys=True,allow_nan=False).encode(),'CONFIG.json':config_raw,'DIAGNOSTICS.json':diag_raw}
+    manifest={'schema':'B_BOT_GITHUB_RUNTIME_FEEDBACK_V1','received_commit':received_commit,'created_at_epoch':stamp,'files':{name:{'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()} for name,raw in payloads.items()},'database_opened':database.is_file(),'database_read_only':True,'orders_touched':False,'symbols':sorted(symbols),'timeframes':sorted(frames)}
     payloads['MANIFEST.json']=json.dumps(manifest,sort_keys=True).encode()
     repo='git@github.com:hans1177/bbot-lab.git';ref='refs/heads/runtime-feedback';cache_dir=state/'github_runtime.git'
     env=os.environ.copy();env.update(GIT_SSH_COMMAND='ssh -i /home/ec2-user/.ssh/bbot_lab_feedback -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/home/ec2-user/.ssh/bbot_lab_hosts',GIT_AUTHOR_NAME='B-Bot runtime',GIT_AUTHOR_EMAIL='runtime@localhost',GIT_COMMITTER_NAME='B-Bot runtime',GIT_COMMITTER_EMAIL='runtime@localhost')
@@ -1029,7 +1146,7 @@ def publish_github_feedback(candidates, received_commit):
         digest=git('hash-object','-w','--stdin',data=raw);entries.append('100644 blob '+digest+'\t'+name+'\n')
     tree=git('mktree',data=''.join(entries).encode())
     # 부모 없는 최신 스냅샷으로 원격 branch의 무제한 이력 누적을 피한다.
-    commit=git('commit-tree',tree,data=b'Latest read-only runtime market feedback\n')
+    commit=git('commit-tree',tree,data=b'Latest read-only runtime feedback and diagnostics\n')
     git('push','--force-with-lease='+ref+':'+expected,repo,commit+':'+ref)
     git('update-ref',ref,commit)
     feedback_state=state/'r4_github_feedback_state.json'
@@ -1039,7 +1156,7 @@ def publish_github_feedback(candidates, received_commit):
         try:previous=json.loads(feedback_state.read_text())
         except (ValueError,OSError):pass
     scope=hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest()
-    result={'status':'PUBLISHED','commit':commit,'updated_at_epoch':stamp,'scope':scope,'database_opened':False,'orders_touched':False,'symbols':len(symbols),'timeframes':sorted(frames)}
+    result={'status':'PUBLISHED','commit':commit,'updated_at_epoch':stamp,'scope':scope,'database_opened':database.is_file(),'database_read_only':True,'orders_touched':False,'symbols':len(symbols),'timeframes':sorted(frames)}
     temporary=feedback_state.with_suffix('.tmp');temporary.write_text(json.dumps(result,sort_keys=True));os.replace(temporary,feedback_state)
     if previous.get('scope')!=scope:
         log=BASE/'logs/runner.log';log.parent.mkdir(parents=True,exist_ok=True)
