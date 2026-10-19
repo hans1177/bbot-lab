@@ -519,9 +519,14 @@ class MultiStrategyRuntime:
                             "trade_time_ms": t_ms,
                             "qty_units": qty,
                             "price_ticks": price_ticks,
+                            # 외부 수동 청산 증거도 거래소가 실제 반환한 원문만 기록한다.
+                            # 존재하지 않는 자산/금액은 추정하지 않고 incomplete 유지.
+                            "qty_text": str(trade.get("qty") or ""),
+                            "price_text": str(trade.get("price") or ""),
                             "fee_text": str(trade.get("commission") or "0"),
                             "fee_asset": str(trade.get("commissionAsset") or ""),
                             "realized_pnl_text": str(trade.get("realizedPnl") or "0"),
+                            "realized_pnl_asset": str(trade.get("marginAsset") or ""),
                         })
                     if not verified:
                         raise RuntimeError("MANUAL_EXIT_NO_VERIFIED_EXTERNAL_TRADES")
