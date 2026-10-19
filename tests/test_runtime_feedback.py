@@ -39,7 +39,7 @@ class RuntimeFeedbackTests(unittest.TestCase):
         original=self.config.read_bytes()
         def systemd_and_git(command, **kwargs):
             if command[:3]==['systemctl','show','r4-runtime.service']:
-                return types.SimpleNamespace(returncode=0,stdout='on-failure\\n')
+                return types.SimpleNamespace(returncode=0,stdout='on-failure')
             return self.git(command,**kwargs)
         with patch.object(subprocess,'run',systemd_and_git):
             self.publish([], 'd'*40)
