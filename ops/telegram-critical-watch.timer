@@ -1,0 +1,12 @@
+[Unit]
+Description=Run independent B-Bot critical Telegram alert check every two minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=2min
+AccuracySec=20s
+Persistent=false
+Unit=telegram-critical-watch.service
+
+[Install]
+WantedBy=timers.target
