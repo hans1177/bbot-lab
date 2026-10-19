@@ -83,7 +83,11 @@ class R4UserStream:
             raise RuntimeError("USER_STREAM_LISTEN_KEY_FAILED")
         # 설치된 기존 SDK에서 지원할 때만 상태 관찰 콜백 연결.
         # callback은 오류 로그만 기록하며 별도 소켓/서비스를 시작하지 않는다.
-        params = inspect.signature(UMFuturesWebsocketClient).parameters
+        try:
+            params = inspect.signature(UMFuturesWebsocketClient).parameters
+        except (TypeError, ValueError):
+            # SDK가 시그니처 메타데이터를 노출하지 않아도 기존 생성은 유지한다.
+            params = {}
         ws_options = {"on_message": self._message}
         if "on_close" in params:
             ws_options["on_close"] = self._on_close
