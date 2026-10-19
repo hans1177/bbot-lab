@@ -104,8 +104,9 @@ class R4UserStreamTests(unittest.TestCase):
         import sys
         import types
         from unittest.mock import patch
+        from contextlib import nullcontext
 
-        for old_sdk in (False, True):
+        for old_sdk, bad_signature in ((False, False), (True, False), (False, True)):
             logs, calls = [], []
             instances = []
             class FakeSocket:
@@ -149,14 +150,16 @@ class R4UserStreamTests(unittest.TestCase):
             for name in names[:-1]:
                 modules[name].__path__ = []
             modules[full].UMFuturesWebsocketClient = FakeSdk
-            with patch.dict(sys.modules, modules), patch.object(threading, "Thread", FakeThread):
+            sig_guard = (patch("inspect.signature", side_effect=ValueError("hidden"))
+                         if bad_signature else nullcontext())
+            with patch.dict(sys.modules, modules), patch.object(threading, "Thread", FakeThread), sig_guard:
                 stream.start()
                 self.assertEqual(calls[0][0], "listen_key")
                 self.assertEqual(calls[1][0], "subscribe")
                 self.assertEqual(calls[1][1]["listen_key"], "FIXTURE")
                 self.assertTrue(stream.keeper.started)
                 self.assertTrue(callable(instances[0].callbacks["on_message"]))
-                if old_sdk:
+                if old_sdk or bad_signature:
                     self.assertEqual(set(instances[0].callbacks), {"on_message"})
                 else:
                     self.assertTrue(callable(instances[0].callbacks["on_close"]))
