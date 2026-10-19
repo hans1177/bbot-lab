@@ -133,6 +133,18 @@ class CriticalWatchTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,"WATCH_STATE_SYMLINK"):
             watch.evaluate_once(self.base,[],self.sent.append,1000)
 
+    def test_systemd_template_is_off_by_default_and_never_restarts_trader(self):
+        service=(ROOT/"ops/telegram-critical-watch.service").read_text()
+        timer=(ROOT/"ops/telegram-critical-watch.timer").read_text()
+        self.assertIn("--check", service)
+        self.assertIn("User=ec2-user", service)
+        self.assertIn("NoNewPrivileges=true", service)
+        self.assertNotIn("systemctl restart", service)
+        self.assertNotIn("r4-runtime.service", service)
+        self.assertNotIn("runner.service", service)
+        self.assertIn("OnUnitInactiveSec=2min", timer)
+        self.assertNotIn("OnUnitInactiveSec=30s", timer)
+
     def test_env_parser_filters_unrelated_secrets(self):
         env=self.base/".env"
         env.write_text("TRADING_SECRET=PRIVATE\nTELEGRAM_TOKEN=abc\nTELEGRAM_CHAT_ID=1234\n")
