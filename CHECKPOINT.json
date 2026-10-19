@@ -8840,6 +8840,42 @@
       "bytes": 458284,
       "sha256": "6a25f12fcc0cf4095de5e4ce62e71add25e33cfe8bd146dcc68c58cae088829e"
     },
+    "strategy_lab/results/20261019_202927_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 458796,
+      "sha256": "47fb4c57ffea6a1d2682f57227fe6b35d2b7f87b736e754d8610b78e930ec550"
+    },
+    "strategy_lab/results/20261019_202934_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 458593,
+      "sha256": "60a1b4dd1f0d4a66406f8b8465fcd2b4140411793a734d8d3b4ecfd1ef99b72e"
+    },
+    "strategy_lab/results/20261019_202940_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 458679,
+      "sha256": "18aa3a68bb05ef4d12027b9b54b89ff26774673cbf844e0f7eadae7a2c759515"
+    },
+    "strategy_lab/results/20261019_202947_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 458514,
+      "sha256": "565b498556f957a9b0b70302be572ae0f9d357ecb1d1f3ddac5f9aed9b340887"
+    },
+    "strategy_lab/results/20261019_202954_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 458612,
+      "sha256": "7f9572672c7cc0a6975d01bc4f82772555b004305cfaf9b88e0b7ef56cad12c4"
+    },
+    "strategy_lab/results/20261019_203000_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 458321,
+      "sha256": "9c0ce802ac09b949d859052d5ed81e2739eddba868fe4e5479c50b31db47c4e8"
+    },
+    "strategy_lab/results/20261019_203007_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 458280,
+      "sha256": "446430858dd4c2d91f299b48f08a39d5bf254bd03c63065743cfc7249695e12b"
+    },
+    "strategy_lab/results/20261019_203013_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 458099,
+      "sha256": "68913f190e7f937e8df5c8e7b97fc6386940a5f007537b05c36ee5825b86424e"
+    },
+    "strategy_lab/results/20261019_203020_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 458450,
+      "sha256": "04534638f52eba47a54e309eb58b720c9619de77e20d8212d6ec4ea27809543b"
+    },
     "strategy_lab/results/v3/auto_runtime_release_state.json": {
       "bytes": 156,
       "sha256": "6e2c0b2d38c60f42aa97c7142b0a37c39e0b965d39b9ffe97a87e19cf2be9b7d"
@@ -11246,15 +11282,15 @@
     },
     "strategy_lab/results/v3/historical_314_pipeline_stage2.json": {
       "bytes": 1550897,
-      "sha256": "4d3f1e67c209fe63afa0191141607c0e6ce8e024d8a678a3c71de6c525f9ee06"
+      "sha256": "79faeece1412f7670c203c0da88c18885b46982ee6a08528eaaa41b8de06232e"
     },
     "strategy_lab/results/v3/individual_reentry_final_risk_stage4.json": {
       "bytes": 960919,
       "sha256": "636301ce7059c659480a523bb2561ea558122d4ab297da5d0d6791b29e76f31e"
     },
     "strategy_lab/results/v3/individual_trailing_stage3.json": {
-      "bytes": 1799149,
-      "sha256": "09b0ec94a5418c308e4230e86457cd05bfd1dc597409daf24c1c35801c12a89a"
+      "bytes": 1812794,
+      "sha256": "1449d7563e2d4a73f6e9f1928f88c1cff7eccdff271d256c2a0b295ca87809d2"
     },
     "strategy_lab/results/v3/redeveloped_strategies/v3_adaptive_channel_rfull_validation_1.py": {
       "bytes": 2954,
@@ -11369,8 +11405,8 @@
       "sha256": "67a043b9583e918eccacb8b4463ad363f6e58079ef0a546f1cc8d76c0ba00cf3"
     },
     "strategy_lab/results/v3/roadmap_queue.json": {
-      "bytes": 386128,
-      "sha256": "f9d664213202324ab37ecf258b17c8d50770477bf9733d9555141a8fe762ce55"
+      "bytes": 386135,
+      "sha256": "97dda9faec68d8f93b52eac2a252128ae90069d73715a22471b0606e9a21dbcb"
     },
     "strategy_lab/results/v3/runtime_diagnostics.json": {
       "bytes": 9465,
@@ -11381,9 +11417,9 @@
       "sha256": "c320971a75e5b6b3c1dc6804b1243d0d9ee69c6d82df393900622b636440c697"
     },
     "strategy_lab/results/v3/trial_ledger.json": {
-      "bytes": 1396783,
-      "sha256": "68ad7f40027ddd2150223dd5bdf8f7a8c29d55b77e45ceead92186db3c5ff194"
+      "bytes": 1402696,
+      "sha256": "d6deae425a1b80f3108becbb786bbce22aad92bc3e61967be16ffd22e67645d8"
     }
   },
-  "archive_sha256": "ae5cd6300a69f5e893d75fc90aff66f94e73bc61d415346453caf82d1ea92f17"
+  "archive_sha256": "8bff60eaeb6a114dc919ff79960375d1e37325795975e2e3252aa0afd63b66a6"
 }
