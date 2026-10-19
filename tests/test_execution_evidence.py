@@ -384,6 +384,70 @@ class ExecutionEvidenceTests(unittest.TestCase):
             self.assertNotIn('positionSide',sent)
         self.assertEqual(calls,[])
 
+    def test_manual_external_exit_uses_only_actual_binance_fields_and_epoch_seconds(self):
+        # 외부 청산은 신규 주문·청산 인텐트 없이 거래소 증거만 기록한다.
+        self.fill()
+        result = self.ledger.confirm_external_reduction(
+            self.intent['leg_id'], 10, 0, [{
+                'trade_id':'manual-trade-1',
+                'order_id':'external-order-1',
+                'trade_time_ms':1792396809000,
+                'qty_units':10, 'price_ticks':110,
+                'qty_text':'10', 'price_text':'110',
+                'fee_text':'0.1', 'fee_asset':'USDT',
+                'realized_pnl_text':'3', 'realized_pnl_asset':'USDT',
+            }],
+        )
+        self.assertTrue(result['ok'])
+        with closing(self.ledger.connect()) as con:
+            row=con.execute(
+                "SELECT * FROM r4_trade_evidence WHERE kind='EXIT_FILL' AND source='BINANCE_ACCOUNT_TRADES_AND_ORDERS'"
+            ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row['evidence_complete'],1)
+            self.assertEqual(row['exchange_ts'],1792396809)
+            self.assertEqual(row['qty_text'],'10')
+            self.assertEqual(row['price_text'],'110')
+            self.assertEqual(row['realized_pnl_asset'],'USDT')
+            self.assertEqual(row['hard_fail'],0)
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM r4_exit_intents").fetchone()[0],0)
+
+    def test_manual_external_exit_missing_binance_asset_remains_incomplete(self):
+        # Binance 응답에 없는 마진 자산을 가정해 proof를 완성하지 않는다.
+        self.fill()
+        self.ledger.confirm_external_reduction(
+            self.intent['leg_id'],10,0,[{
+                'trade_id':'manual-trade-2', 'order_id':'external-order-2',
+                'trade_time_ms':1792396809000, 'qty_units':10,
+                'price_ticks':110, 'qty_text':'10','price_text':'110',
+                'fee_text':'0.1','fee_asset':'USDT',
+                'realized_pnl_text':'3','realized_pnl_asset':'',
+            }],
+        )
+        with closing(self.ledger.connect()) as con:
+            row=con.execute("SELECT evidence_complete,realized_pnl_asset,hard_fail FROM r4_trade_evidence WHERE kind='EXIT_FILL'").fetchone()
+            self.assertEqual(row['evidence_complete'],0)
+            self.assertEqual(row['realized_pnl_asset'],'')
+            self.assertEqual(row['hard_fail'],0)
+
+    def test_manual_exit_trade_extraction_preserves_original_values(self):
+        # 실제 reconcile_all 경로의 verified[] 페이로드를 검사한다.
+        tree=ast.parse((ROOT/'multi_strategy_runtime.py').read_text())
+        fn=next(node for node in ast.walk(tree) if isinstance(node,ast.FunctionDef) and node.name=='reconcile_all')
+        candidates=[node for node in ast.walk(fn)
+                    if isinstance(node,ast.Call)
+                    and isinstance(node.func,ast.Attribute)
+                    and isinstance(node.func.value,ast.Name)
+                    and node.func.value.id=='verified'
+                    and node.func.attr=='append']
+        self.assertEqual(len(candidates),1)
+        payload=candidates[0].args[0]
+        self.assertIsInstance(payload,ast.Dict)
+        by_key={key.value:ast.unparse(value) for key,value in zip(payload.keys,payload.values)}
+        self.assertEqual(by_key['qty_text'],"str(trade.get('qty') or '')")
+        self.assertEqual(by_key['price_text'],"str(trade.get('price') or '')")
+        self.assertEqual(by_key['realized_pnl_asset'],"str(trade.get('marginAsset') or '')")
+
     def test_rest_exact_trade_cost(self):
         row=self.normalize(self.trades())['fills'][0]
         self.assertEqual(row['fill_id'],'TRADE:1:17');self.assertEqual(row['economic_evidence']['fee_text'],'0.1')
