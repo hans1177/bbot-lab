@@ -3114,6 +3114,16 @@ class R4RuntimeService:
                     result_cache[cache_key] = result
                 if int(result.get("allow") or 0) != 1:
                     continue
+                # 파일명: r4_runtime_service.py / 알 수 없는 신호 방향을 SHORT로 해석하지 않는다.
+                # 정상 BUY/SELL의 주문·청산 경로와 실행 주기는 변경하지 않는다.
+                if result.get("side") not in ("BUY", "SELL"):
+                    _log(
+                        "error",
+                        f"R4_INVALID_SIGNAL_SIDE:{instance_id}:{symbol}",
+                        "[주문][R4][ENTRY_BLOCK] reason=INVALID_SIGNAL_SIDE",
+                        sec=300,
+                    )
+                    continue
                 if not self._matches_result(instance, result):
                     continue
                 plan = self._plan(symbol, result, instance)
