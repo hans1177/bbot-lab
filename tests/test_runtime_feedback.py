@@ -55,6 +55,62 @@ class RuntimeFeedbackTests(unittest.TestCase):
             'UNKNOWN',
         )
 
+    def test_github_diagnostics_reports_six_instances_and_live_exit_proofs(self):
+        config=json.loads(self.config.read_text())
+        config['r4_runtime']={'strategy_instances':{
+            'SI_'+str(i):{'strategy_id':'TEST','timeframe':'12H','tier':'CANARY',
+                           'enabled':True,'entry_enabled':True}
+            for i in range(6)}}
+        self.config.write_text(json.dumps(config))
+        stamp=int(time.time())
+        (self.state/'r4_execution_evaluations.json').write_text(json.dumps({
+            'schema':'R4_EVALUATION_OBSERVATIONS_V1',
+            'updated_at_epoch':stamp,
+            'entry_evaluations':[{'instance_id':'SI_0','frame':'12H',
+                                  'symbol':'AXSUSDT','status':'NO_SIGNAL',
+                                  'evaluated_at_epoch':stamp}],
+            'exit_evaluations':[{'instance_id':'SI_0','frame':'12H',
+                                 'symbol':'AXSUSDT','side':'SHORT',
+                                 'leg_id':'LEG_old','status':'NO_OPPOSITE',
+                                 'evaluated_at_epoch':stamp,
+                                 'UNTRUSTED_SECRET':'DO_NOT_EXPOSE'}],
+        }))
+        before=(self.state/'r4_execution_evaluations.json').read_bytes()
+        self.call()
+        diag=self.payload('DIAGNOSTICS.json')
+        obs=diag['evaluations']
+        self.assertEqual(obs['state'],'OBSERVED_FRESH')
+        self.assertEqual(len(obs['instances']),6)
+        tracked=next(x for x in obs['instances'] if x['instance']=='SI_0')
+        self.assertEqual(tracked['entry_result'],'NO_SIGNAL')
+        self.assertEqual(tracked['exit_result'],'NO_OPPOSITE')
+        self.assertEqual(tracked['exit_legs_observed'],1)
+        self.assertTrue(obs['position_evaluations'][0]['fresh'])
+        self.assertNotIn('DO_NOT_EXPOSE',json.dumps(diag))
+        self.assertEqual((self.state/'r4_execution_evaluations.json').read_bytes(),before)
+
+    def test_no_eval_snapshot_is_not_falsely_reported_as_healthy(self):
+        self.call()
+        self.assertEqual(self.payload('DIAGNOSTICS.json')['evaluations']['state'],
+                         'NO_DIRECT_EVIDENCE')
+        (self.state/'r4_execution_evaluations.json').write_text(json.dumps({
+            'schema':'R4_EVALUATION_OBSERVATIONS_V1',
+            'updated_at_epoch':int(time.time())-900,
+            'entry_evaluations':[],
+            'exit_evaluations':[],
+        }))
+        self.call()
+        self.assertEqual(self.payload('DIAGNOSTICS.json')['evaluations']['state'],
+                         'STALE')
+
+    def test_malformed_eval_snapshot_fails_closed_without_leaking_payload(self):
+        file=self.state/'r4_execution_evaluations.json'
+        file.write_text('{"untrusted":"SECRET_DATA"}')
+        self.call()
+        obs=self.payload('DIAGNOSTICS.json')['evaluations']
+        self.assertEqual(obs['state'],'INVALID')
+        self.assertNotIn('SECRET_DATA',json.dumps(self.payload('DIAGNOSTICS.json')))
+
     def test_stale_collector_cannot_publish(self):
         heartbeat=json.loads(self.heartbeat.read_text());heartbeat['updated_at_epoch']=time.time()-181;self.heartbeat.write_text(json.dumps(heartbeat))
         with self.assertRaisesRegex(RuntimeError,'COLLECTOR_NOT_LIVE'):self.call()
