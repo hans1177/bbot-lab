@@ -381,6 +381,13 @@ jobs:
           sys.path.insert(0,str(Path(os.environ['BBOT_LOCAL_ROOT'])/'strategy_lab'))
           import v3_deployment
           print(json.dumps(v3_deployment.export_runtime_candidates(Path(os.environ['RUNNER_TEMP'])/'runtime-candidates-out',validated_release=True)))
+      - name: P0 final-certification progress (read only)
+        if: always() && steps.prepare.outcome == 'success' && steps.restore.outcome == 'success'
+        env:
+          P0_RESEARCH_ROOT: ${{ env.BBOT_LOCAL_ROOT }}
+          P0_CANDIDATE_MANIFEST: ${{ runner.temp }}/runtime-candidates-out/MANIFEST.json
+        run: |
+          python strategy_lab/first_final_pass_report.py --root "$P0_RESEARCH_ROOT" --manifest "$P0_CANDIDATE_MANIFEST"
       - name: Preserve research checkpoint
         id: checkpoint
         if: always() && steps.prepare.outcome == 'success' && steps.restore.outcome == 'success'
