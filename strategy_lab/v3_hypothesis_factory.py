@@ -743,6 +743,8 @@ def run_one(candidate=None, timeframe=None, prepare_only=False, task=None, proce
               "env":{"BBOT_RESEARCH_DATASET_MODE":"HARD_PASS_ONLY","BBOT_RESEARCH_START":research_start,"BBOT_RESEARCH_END":research_end}}
         if prepare_only:return task
     tf=task["timeframe"];recipe=task["recipe"];name=task["name"];trial=task["trial"]
+    research_start=task["env"]["BBOT_RESEARCH_START"]
+    research_end=task["env"]["BBOT_RESEARCH_END"]
     module=ROOT/task["source"];strategy_name=task["strategy_name"];start=task["started"]
     if hashlib.sha256(module.read_bytes()).hexdigest()!=task["source_sha256"]:raise RuntimeError("PARALLEL_SOURCE_CHANGED")
     if process is None:

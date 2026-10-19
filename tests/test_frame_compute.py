@@ -96,5 +96,25 @@ class FrameComputeTests(unittest.TestCase):
         (self.root/'INPUT_RECEIPT.json').write_text('{"changed":true}')
         with self.assertRaisesRegex(RuntimeError,'BINDING_CHANGED'):self.run(resume=self.records['controller_compute_batch'])
 
+    def test_grammar_finalization_restores_training_dates_from_saved_task(self):
+        path=Path(__file__).resolve().parents[1]/'strategy_lab/v3_hypothesis_factory.py'
+        node=next(n for n in ast.parse(path.read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='run_one')
+        source=self.lab/'results/v3/grammar.py';source.write_text('# source')
+        report=self.lab/'results/grammar.json';report.write_text('{}')
+        rows=[]
+        ns={'ROOT':self.root,'hashlib':hashlib,'json':json,'Any':object,
+            'governance':types.SimpleNamespace(assert_kernel_unchanged=lambda before:None),
+            'finite':lambda value:None,
+            'knowledge':types.SimpleNamespace(complete_trial=lambda *args:None,record_result=lambda key,row,failed:rows.append(row))}
+        exec(compile(ast.Module(body=[node],type_ignores=[]),'actual_grammar_finalization','exec'),ns)
+        sr=types.SimpleNamespace(evaluate=lambda *args,**kw:{'pass':False,'hard_pass':False})
+        task={'timeframe':'1H','recipe':{},'name':'GRAMMAR','trial':1,'source':str(source.relative_to(self.root)),
+            'strategy_name':'GRAMMAR','started':0,'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),
+            'before':{},'result_file':str(report.relative_to(self.root)),
+            'env':{'BBOT_RESEARCH_START':'2016-01-01','BBOT_RESEARCH_END':'2024-08-20'}}
+        with patch.dict(sys.modules,{'v3_strategy_research':sr}):ns['run_one'](task=task,process=subprocess.CompletedProcess([],0,''))
+        self.assertEqual(rows[0]['research_start'],'2016-01-01')
+        self.assertEqual(rows[0]['research_end'],'2024-08-20')
+
 
 if __name__=='__main__':unittest.main()

@@ -1,4 +1,5 @@
 name: Research runtime
+# Saved compute receipts restore their original training window before finalization.
 # Keep scheduled research independent of development sessions; never cancel a running job.
 on:
   push:
