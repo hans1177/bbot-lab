@@ -64,7 +64,7 @@ class ObserverTests(unittest.TestCase):
         service = next(n for n in tree.body if isinstance(n, ast.ClassDef)
                        and n.name == "R4RuntimeService")
         methods = {n.name: n for n in service.body if isinstance(n, ast.FunctionDef)}
-        calls = {n.name for n in ast.walk(methods["cycle"])
+        calls = {n.attr for n in ast.walk(methods["cycle"])
                  if isinstance(n, ast.Attribute)}
         self.assertIn("evaluate_frame", calls)
         self.assertIn("_eval_note", calls)
