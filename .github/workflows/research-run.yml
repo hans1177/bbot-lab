@@ -347,7 +347,10 @@ jobs:
       - name: Run existing research controller
         id: research
         env:
-          REQUESTED_CYCLES: ${{ github.event_name == 'schedule' && '0' || inputs.cycles || '8' }}
+          # Push-triggered P0 research must keep running within the existing bounded
+          # cloud time budget so the next certified gate is not stranded at cycle 8.
+          # Scheduler resource caps, canonical gates and manual cycle input remain unchanged.
+          REQUESTED_CYCLES: ${{ github.event_name == 'schedule' && '0' || inputs.cycles || '0' }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -o pipefail
