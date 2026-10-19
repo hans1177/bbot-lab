@@ -134,3 +134,15 @@ GitHub 연구 실행은 기존 `tick(cloud_validation=True)`에서 기존 후보
 - 텔레그램: 서버의 `server_status_telegram.py`, `monitor.py` 파일 유무/해시와 `[주문][SERVER_STATUS_TELEGRAM] sent ok` 및 `fail err=`의 건수만 수집한다. 오류 원문, HTTP 요청 URL, 텔레그램 토큰, 채팅 ID 및 메시지 본문은 절대 전송하지 않는다. `sent ok`는 **서버 로그상의 요청 성공 기록**이며 사용자 단말 수신 확인은 아니다(`message_delivery_verified=false`). 송신 기록과 파일이 없어도 서비스 장애를 확정하지 않는다.
 - 모든 보조 진단은 기존 최근 로그 64 KiB/400줄만 판독하여 과거 누적·추세·실제 프로세스 상태를 대표하지 않는다. 로그 타임스탬프가 없으면 최신 이벤트 시각을 `0`으로 표시한다. 동작 상태의 완전한 직접 계측은 서버 전용 웹소켓 모듈과 신호 평가 코드를 별도 검증한 뒤 **거래 코드 변경 심사와 승인**을 거쳐 진행한다.
 - 진단 출력은 기존 `DIAGNOSTICS.json`만 확장하며 연구실 허용 stage에 `telegram`을 추가한다. 전략 변경, 신규 주문, 데이터베이스 쓰기, 알림 메시지 발송, 실거래 서비스 재시작을 하지 않는다.
+
+
+## 대화형 텔레그램 조회 프로토타입 (배포 전·기본 비활성)
+
+새 \`runtime/telegram_readonly_query.py\`는 특정 개인 채팅 ID와 사용자 ID를 **모두** 검증한 후 \`getUpdates\`/ \`sendMessage\`만 사용하는 조회 전용 모듈이다. 자연어는 고정 명령어로만 분류하며 거래 API, 주문, 서비스 재시작, DB 쓰기, 임의 SQL 실행은 제공하지 않는다. 자동 알림이나 현재 \`server_status_telegram.py\` 일정은 변경하지 않는다.
+
+- 지원 질문: \`상태\`, \`거래 횟수\`, \`전략\`, \`위험\`, \`승률\`, \`현금 잔고\`, \`도움말\`. 평소 자동 보고를 줄이고 장애 알림을 유지하는 **운영 정책은 서버의 현재 예약 작업과 모니터를 확인한 후 별도 설치/활성화**한다.
+- 원장 조회는 \`state/history.db\`를 SQLite \`mode=ro\` 및 \`PRAGMA query_only=ON\`으로 연다. '진입 주문 의도'와 '종료 Leg' 수는 실제 거래소 체결 횟수나 경제적 승률로 혼용하지 않는다.
+- 현재 승률/현금/총자산에 대해 별도의 재현 가능한 비용·펀딩비 검증 또는 거래소 잔고 읽기 경로가 없으므로 **추정 금지, 미검증 상태로 응답**한다. 계좌 잔고/손익은 GitHub 공개·피드백 자료에 넣지 않으며, 이후 신뢰 가능한 서버 내부 읽기 경로를 독립 설계해야 한다.
+- 실행 코드는 자동 시작하지 않으며 \`--poll-once\`에서만 Telegram에 연결된다. 환경변수 \`TELEGRAM_BOT_TOKEN\` (또는 \`TELEGRAM_TOKEN\`), \`TELEGRAM_ALLOWED_CHAT_ID\`, \`TELEGRAM_ALLOWED_USER_ID\`가 모두 있어야 한다. 외부 제공자와의 getUpdates 컨슈머 충돌, webhook 등록 여부, 로그 유출 및 소유자 접근 제어를 실서버 배포 전에 점검해야 한다.
+- 조회 중의 유일한 쓰기 위치는 독립 \`state/telegram_query_offset.json\`이며 trading DB·config·order API에는 쓰지 않는다. 네트워크/토큰 오류 원문은 출력하지 않고 일반 상태코드로 처리한다.
+- **라이브 적용 전 필수 점검**: 기존 \`monitor.py\`가 \`runner.service\`를 자동 재시작하는지, \`server_status_telegram.py\`의 실제 systemd timer 및 다른 Telegram getUpdates 소비자가 존재하는지 읽기 전용으로 확인한다. 기존 R4 단일 실행기와 충돌할 위험이 있다. 봇 토큰·채팅 ID·SSH 개인키는 GitHub, 대화 로그, PR, 테스트에 넣지 않는다.
