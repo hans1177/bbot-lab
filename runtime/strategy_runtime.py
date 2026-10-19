@@ -1076,7 +1076,9 @@ def publish_github_feedback(candidates, received_commit):
     for iid,entry in list(config_instances.items())[:64]:
         if not isinstance(entry,dict):continue
         fields=(iid,entry.get('strategy_id'),entry.get('timeframe'),entry.get('tier'))
-        if all(isinstance(x,str) and re.fullmatch('[A-Za-z0-9_.:-]{1,160}',x) for x in fields):
+        if (isinstance(fields[0],str) and re.fullmatch('[A-Za-z0-9_.:-]{1,160}',fields[0])
+            and isinstance(fields[1],str) and re.fullmatch('[A-Za-z0-9_.:+-]{1,160}',fields[1])
+            and all(isinstance(x,str) and re.fullmatch('[A-Za-z0-9_.:-]{1,160}',x) for x in fields[2:])):
             diag['ledger']['instances'].append({
                 'instance':iid,'strategy':fields[1],'frame':fields[2],'tier':fields[3],
                 'enabled':entry.get('enabled') is True,
