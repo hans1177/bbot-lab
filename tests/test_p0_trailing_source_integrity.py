@@ -40,6 +40,9 @@ class ExactTrailingSourceIntegrityTests(unittest.TestCase):
         )
         ns={"ROOT":self.root,"Path":Path,"TRAILING_STAGE3":self.root/"stage3.json",
             "re":re,"hashlib":hashlib,"math":math,
+            "_trailing_pair_key":lambda a,b:f"{float(a):.4f}|{float(b):.4f}",
+            "_trailing_evidence":lambda report,tf:report.get("test_metrics"),
+            "load":lambda path,default:json.loads(Path(path).read_text(encoding="utf-8")),
             "now":lambda:"2026-10-19T00:00:00Z",
             "atomic":lambda path,row:self.saved.append(("stage3",json.loads(json.dumps(row)))),
             "_save_historical_stage2":lambda row:self.saved.append(("pipeline",json.loads(json.dumps(row)))),
@@ -47,7 +50,8 @@ class ExactTrailingSourceIntegrityTests(unittest.TestCase):
             "policy_research":SimpleNamespace(research_exit=lambda *a,**kw:self.fail("SHOULD_NOT_SELECT")),
             "str":str}
         tree=ast.parse((REPO/"strategy_lab/v3_strategy_research.py").read_text(encoding="utf-8-sig"))
-        names={"_trailing_result_binding_error",
+        names={"_trailing_frozen_results_error",
+               "_trailing_result_binding_error",
                "_trailing_source_integrity_error",
                "_block_trailing_source_drift",
                "_run_trailing_pair",
@@ -123,6 +127,75 @@ class ExactTrailingSourceIntegrityTests(unittest.TestCase):
         result,completed=self.simulated_report_run(report)
         self.assertEqual(result["reason"],"TRAILING_RESULT_CONFIG_MISMATCH")
         self.assertEqual(completed[0][2],"FAIL")
+
+    def frozen_measurement(self):
+        """One archived stage3 result with a real JSON report and exact tuple."""
+        path=self.root/"strategy_lab/results/v3/trailing_report.json"
+        path.parent.mkdir(parents=True,exist_ok=True)
+        data={"strategy_file":str(self.source),
+              "individual_trailing_research":{"start_pct":3.0,"callback_pct":1.0},
+              "research_window":{"mode":"HARD_PASS_ONLY"},
+              "test_metrics":{"trades":500,"walk_forward_oos_expectancy_pct":0.2}}
+        path.write_text(json.dumps(data),encoding="utf-8")
+        self.item["coarse_candidates"]=[]
+        self.item["coarse_results"]={}
+        self.item["fine_candidates"]=[{"start_pct":3.0,"callback_pct":1.0}]
+        self.item["fine_results"]={"3.0000|1.0000":{
+            "status":"MEASURED","start_pct":3.0,"callback_pct":1.0,
+            "result_json":path.relative_to(self.root).as_posix(),
+            "evidence":data["test_metrics"]}}
+        return path,data
+
+    def expect_frozen_rejection(self, reason):
+        result=self.ns["_finalize_trailing_selection"](
+            self.state,self.target,self.stage3,self.item)
+        self.assertEqual(result["reason"],reason)
+        self.assertEqual(self.target["pipeline_stage"],"INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE")
+        self.assertFalse(result["automatic_promotion"])
+        self.assertEqual(self.item["status"],"INCOMPLETE")
+        self.assertTrue(self.records[0][1]["failed"])
+
+    def test_frozen_measured_report_authenticated_before_selection(self):
+        self.frozen_measurement()
+        self.assertIsNone(self.ns["_trailing_frozen_results_error"](self.target,self.item))
+        self.assertEqual(self.target["pipeline_stage"],"INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING")
+
+    def test_frozen_missing_report_quarantined_before_selection(self):
+        path,_=self.frozen_measurement()
+        path.unlink()
+        self.expect_frozen_rejection("TRAILING_FROZEN_RESULT_MISSING")
+
+    def test_frozen_modified_report_source_quarantined(self):
+        path,data=self.frozen_measurement()
+        data["strategy_file"]=str(self.root/"wrong.py")
+        path.write_text(json.dumps(data))
+        self.expect_frozen_rejection("TRAILING_FROZEN_TRAILING_RESULT_SOURCE_MISMATCH")
+
+    def test_frozen_pair_drift_quarantined(self):
+        self.frozen_measurement()
+        self.item["fine_results"]["3.0000|1.0000"]["callback_pct"]=2.0
+        self.expect_frozen_rejection("TRAILING_FROZEN_PAIR_MISMATCH")
+
+    def test_frozen_non_hard_pass_report_quarantined(self):
+        path,data=self.frozen_measurement()
+        data["research_window"]["mode"]="LEGACY_DEFAULT"
+        path.write_text(json.dumps(data))
+        self.expect_frozen_rejection("TRAILING_FROZEN_RESEARCH_WINDOW_INVALID")
+
+    def test_frozen_summary_forgery_quarantined(self):
+        self.frozen_measurement()
+        self.item["fine_results"]["3.0000|1.0000"]["evidence"]["trades"]=999999
+        self.expect_frozen_rejection("TRAILING_FROZEN_EVIDENCE_MISMATCH")
+
+    def test_frozen_report_path_cannot_escape_root(self):
+        self.frozen_measurement()
+        self.item["fine_results"]["3.0000|1.0000"]["result_json"]="../other.json"
+        self.expect_frozen_rejection("TRAILING_FROZEN_RESULT_PATH_INVALID")
+
+    def test_frozen_missing_evaluation_cannot_reach_selection(self):
+        self.frozen_measurement()
+        self.item["fine_results"].clear()
+        self.expect_frozen_rejection("TRAILING_FROZEN_MEASUREMENT_MISSING")
 
     def test_exact_file_has_no_integrity_error(self):
         self.assertIsNone(self.ns["_trailing_source_integrity_error"](self.target))
