@@ -1802,6 +1802,20 @@ def build_json_handoff(snapshot: dict[str, Any]) -> dict[str, Any]:
     master["current_work"] = green7a_runtime["current_work"]
     master["next_work"] = green7a_runtime["next_work"]
 
+    # Development continuity is separate from measured research/runtime truth.
+    progress_path = LAB / "research_development_state.json"
+    if progress_path.is_file():
+        progress_raw = progress_path.read_bytes()
+        progress = json.loads(progress_raw.decode("utf-8-sig"))
+        if progress.get("schema") != "B_BOT_RESEARCH_DEVELOPMENT_STATE_V1":
+            raise RuntimeError("RESEARCH_DEVELOPMENT_STATE_SCHEMA")
+        master["research_development"] = {
+            "source": "strategy_lab/research_development_state.json",
+            "sha256": hashlib.sha256(progress_raw).hexdigest(),
+            "evidence_boundary": "DEVELOPMENT_STATUS_ONLY_NOT_LIVE_OR_RELEASE_EVIDENCE",
+            "state": progress,
+        }
+
     master["snapshot_hash"] = stable_hash(
         master
     )

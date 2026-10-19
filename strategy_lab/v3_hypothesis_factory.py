@@ -693,16 +693,16 @@ def all_complete(tf: str) -> bool:
     return all((r["name"].upper(), tf) in done for r in research_recipes())
 
 
-def choose_next() -> tuple[str, dict[str, Any]] | None:
+def choose_next(timeframe=None, excluded_families=(), excluded_timeframes=()) -> tuple[str, dict[str, Any]] | None:
     done=completed_pairs(); rows=research_recipes(); pending={tf:[] for tf in TF_ORDER}; done_counts={tf:0 for tf in TF_ORDER}
     for tf in TF_ORDER:
         for recipe in rows:
             if (recipe["name"].upper(),tf) in done: done_counts[tf]+=1
-            else: pending[tf].append(recipe)
+            elif str(recipe.get("mode") or recipe["name"]) not in excluded_families: pending[tf].append(recipe)
     contract=(governance.constitution().get("individual_strategy_trailing_optimization") or {}).get("auto_research_allocation_contract") or {}
     dist=contract.get("new_strategy_timeframe_distribution_percent") or {}
     total=sum(done_counts.values())
-    available=[tf for tf in TF_ORDER if pending[tf]]
+    available=[tf for tf in TF_ORDER if pending[tf] and tf not in excluded_timeframes and (timeframe is None or tf == timeframe)]
     if not available:return None
     tf=max(available,key=lambda x:(float(dist.get(x) or 0.0)/100.0*(total+1)-done_counts[x],float(dist.get(x) or 0.0),-TF_ORDER.index(x)))
     return tf,pending[tf][0]
@@ -726,45 +726,37 @@ def _find_result(strategy_name: str, after_ts: float) -> Path | None:
 # ============================================================
 
 
-def run_one(candidate=None) -> dict[str, Any]:
-    if candidate is not None and not isinstance(candidate, dict):
-        raise ValueError("CANDIDATE_MUST_BE_OBJECT")
-    nxt = (str(candidate["timeframe"]).upper(), candidate) if candidate is not None else choose_next()
-    if not nxt:
-        return {"status": "SAFE_GRAMMAR_COMPLETE", "recipe_count": MAX_RECIPES, "timeframes": TF_ORDER}
-
-    tf, recipe = nxt
-    name = recipe["name"].upper()
-    module, strategy_name = module_for(recipe, tf)
-    trial = knowledge.reserve_trial(f"V3_SAFE_HP2016_2024_{name}_{tf}", name, tf, "SAFE_GRAMMAR_HP2016_2024")
-    before = governance.capture_kernel_guard()
+def run_one(candidate=None, timeframe=None, prepare_only=False, task=None, process=None) -> dict[str, Any]:
     import v3_strategy_research as sr
-    env = os.environ.copy()
-    research_start,research_end=sr.hard_pass_dates()
-    env["BBOT_RESEARCH_DATASET_MODE"]="HARD_PASS_ONLY"
-    env["BBOT_RESEARCH_START"]=research_start
-    env["BBOT_RESEARCH_END"]=research_end
-    env["BBOT_LOCAL_ROOT"] = str(ROOT)
-    start = time.time()
-    proc = subprocess.run(
-        [sys.executable, str(RUNNER), str(module)],
-        cwd=str(ROOT),
-        env=env,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    governance.assert_kernel_unchanged(before)
-
+    if task is None:
+        if candidate is not None and not isinstance(candidate, dict):
+            raise ValueError("CANDIDATE_MUST_BE_OBJECT")
+        nxt = (str(candidate["timeframe"]).upper(), candidate) if candidate is not None else choose_next(timeframe)
+        if not nxt:return {"status":"SAFE_GRAMMAR_COMPLETE"}
+        tf,recipe=nxt;name=recipe["name"].upper();module,strategy_name=module_for(recipe,tf)
+        trial=knowledge.reserve_trial(f"V3_SAFE_HP2016_2024_{name}_{tf}",name,tf,"SAFE_GRAMMAR_HP2016_2024")
+        research_start,research_end=sr.hard_pass_dates()
+        task={"kind":"GRAMMAR", "timeframe":tf,"family":recipe.get("mode",name),
+              "trial":trial,"source":str(module.relative_to(ROOT)),"strategy_name":strategy_name,
+              "name":name,"recipe":recipe,"source_sha256":hashlib.sha256(module.read_bytes()).hexdigest(),
+              "started":time.time(),"before":governance.capture_kernel_guard(),
+              "env":{"BBOT_RESEARCH_DATASET_MODE":"HARD_PASS_ONLY","BBOT_RESEARCH_START":research_start,"BBOT_RESEARCH_END":research_end}}
+        if prepare_only:return task
+    tf=task["timeframe"];recipe=task["recipe"];name=task["name"];trial=task["trial"]
+    module=ROOT/task["source"];strategy_name=task["strategy_name"];start=task["started"]
+    if hashlib.sha256(module.read_bytes()).hexdigest()!=task["source_sha256"]:raise RuntimeError("PARALLEL_SOURCE_CHANGED")
+    if process is None:
+        env=os.environ.copy();env.update(task["env"],BBOT_LOCAL_ROOT=str(ROOT))
+        process=subprocess.run([sys.executable,str(RUNNER),str(module)],cwd=str(ROOT),env=env,text=True,encoding="utf-8",errors="replace",stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=1800)
+    proc=process
+    governance.assert_kernel_unchanged(task["before"])
     if proc.returncode != 0:
         knowledge.complete_trial(trial, "SAFE_GRAMMAR_RUN_FAIL", "FAIL", "UNKNOWN")
         row = {"strategy": name, "timeframe": tf, "trial": trial, "status": "FAIL", "reason": "RUN_STRATEGY_FAIL", "output_tail": proc.stdout[-4000:]}
         knowledge.record_result(f"generated:{name}:{tf}", row, failed=True)
         return row
 
-    result = _find_result(strategy_name, start)
+    result = ROOT/task["result_file"] if task.get("result_file") else _find_result(strategy_name, start)
     if result is None:
         knowledge.complete_trial(trial, "RESULT_NOT_FOUND", "FAIL", "UNKNOWN")
         # RESULT_NOT_FOUND_REJECT_MEMORY_V1

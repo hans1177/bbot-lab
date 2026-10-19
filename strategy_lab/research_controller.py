@@ -16,6 +16,9 @@ import json
 import os
 import sys
 import time
+import hashlib
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -569,6 +572,10 @@ def _new_research_available():
 
 
 def _run_new_research_one(held):
+    workers=int(load(LAB/'lab_config.json',{}).get('research_compute_workers',1))
+    if workers==3:
+        batch=_run_frame_batch()
+        if batch is not None:return batch
     nxt=strategy_research.choose_next()
     if nxt:
         row=strategy_research.run_one(); _record_strategy_track("AUTO_MANAGER_SINGLE_FIXED_WINDOW",row); return {"status":"DONE","action":"SINGLE_RESEARCH","result":row}
@@ -595,6 +602,76 @@ def _run_new_research_one(held):
             return {"status": "DONE", "action": "SEALED_SEARCH_CANDIDATE_RESEARCH", "result": row,
                     "wave_id": manifest["wave_id"], "automatic_promotion": False}
     return {"status":"NO_NEW_RESEARCH_BACKLOG"}
+
+
+def _run_frame_batch(resume=None):
+    # 계산만 병렬 처리한다. 예약·중간 저장·결과 반영은 잠금을 보유한 호출자 담당.
+    state_key='controller_compute_batch'
+    bindings={name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
+              for name in ('ROADMAP_CONSTITUTION_V3.json','strategy_lab/run_strategy.py','INPUT_RECEIPT.json')}
+    batch=resume
+    if batch is None:
+        tasks=[];frames=[];families=[]
+        for _ in range(3):
+            nxt=strategy_research.choose_next(excluded_families=families,excluded_timeframes=frames)
+            if nxt:
+                task=strategy_research.run_one(timeframe=nxt[0],excluded_families=families,prepare_only=True)
+            else:
+                nxt=hypothesis_factory.choose_next(excluded_families=families,excluded_timeframes=frames)
+                if not nxt:break
+                task=hypothesis_factory.run_one(candidate=dict(nxt[1],timeframe=nxt[0]),prepare_only=True)
+            tasks.append(task);frames.append(task['timeframe']);families.append(task['family'])
+        if not tasks:return None
+        batch={'schema':'B_BOT_CONTROLLER_COMPUTE_BATCH_V1','status':'PREPARED','bindings':bindings,'tasks':tasks}
+        knowledge.record_result(state_key,batch)
+    if batch.get('schema')!='B_BOT_CONTROLLER_COMPUTE_BATCH_V1' or batch.get('bindings')!=bindings:
+        raise RuntimeError('COMPUTE_BATCH_BINDING_CHANGED')
+    tasks=batch['tasks']
+    if not 1<=len(tasks)<=3 or len({x['timeframe'] for x in tasks})!=len(tasks) or len({x['family'] for x in tasks})!=len(tasks):
+        raise RuntimeError('COMPUTE_BATCH_ISOLATION_INVALID')
+    for task in tasks:
+        source=(ROOT/task['source']).resolve()
+        if not source.is_relative_to((LAB/'results/v3').resolve()) or hashlib.sha256(source.read_bytes()).hexdigest()!=task['source_sha256']:
+            raise RuntimeError('COMPUTE_BATCH_SOURCE_CHANGED')
+        if task['kind'] not in ('SINGLE','GRAMMAR'):raise RuntimeError('COMPUTE_BATCH_KIND_INVALID')
+    if batch['status']=='PREPARED':
+        # 재개 시에도 같은 예약을 사용한다. 원격 저장 전 중단된 계산만 다시 수행한다.
+        for task in tasks:task['started']=time.time()
+        def compute(task):
+            env=os.environ.copy();env.update(task['env'],BBOT_LOCAL_ROOT=str(ROOT))
+            env.pop('GH_TOKEN',None)
+            env.update(OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1')
+            try:
+                p=subprocess.run([sys.executable,str(LAB/'run_strategy.py'),str(ROOT/task['source'])],cwd=str(ROOT),env=env,text=True,encoding='utf-8',errors='replace',stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=1800)
+                return {'returncode':p.returncode,'stdout':p.stdout[-4000:]}
+            except subprocess.TimeoutExpired:
+                return {'returncode':124,'stdout':'COMPUTE_TIMEOUT'}
+        with ThreadPoolExecutor(max_workers=3) as pool:receipts=list(pool.map(compute,tasks))
+        for task,receipt in zip(tasks,receipts):
+            task['process']=receipt
+            finder=strategy_research.find_result if task['kind']=='SINGLE' else hypothesis_factory._find_result
+            result=finder(task['strategy_name'],task['started']) if receipt['returncode']==0 else None
+            if result is not None:
+                task['result_file']=str(result.relative_to(ROOT))
+                task['result_sha256']=hashlib.sha256(result.read_bytes()).hexdigest()
+            elif receipt['returncode']==0:
+                receipt.update(returncode=2,stdout='RESULT_NOT_FOUND')
+        batch['status']='COMPUTED';knowledge.record_result(state_key,batch)
+    results=[]
+    for task in tasks:
+        if task.get('finalized'):
+            results.append(task['finalized']);continue
+        if task.get('result_file'):
+            result=(ROOT/task['result_file']).resolve()
+            if not result.is_relative_to((LAB/'results').resolve()) or hashlib.sha256(result.read_bytes()).hexdigest()!=task['result_sha256']:
+                raise RuntimeError('COMPUTE_BATCH_RESULT_CHANGED')
+        process=subprocess.CompletedProcess([],task['process']['returncode'],task['process']['stdout'])
+        owner=strategy_research if task['kind']=='SINGLE' else hypothesis_factory
+        row=owner.run_one(task=task,process=process)
+        _record_strategy_track('AUTO_MANAGER_FRAME_COMPUTE',row)
+        task['finalized']=row;results.append(row);knowledge.record_result(state_key,batch)
+    batch['status']='FINALIZED';knowledge.record_result(state_key,batch)
+    return {'status':'DONE','action':'FRAME_COMPUTE_BATCH','workers':len(tasks),'timeframes':[x['timeframe'] for x in tasks],'results':results,'automatic_promotion':False}
 
 
 def _managed_availability(work):
@@ -656,6 +733,9 @@ def managed_research_once(held: bool) -> dict:
     if (load(LAB / "lab_config.json", {}).get("github_research") or {}).get("enabled") is True:
         return {"action":"SKIP","reason":"GITHUB_RESEARCH_OWNER","orders_touched":False}
     if not held: return {"action":"GOVERNANCE_BLOCK","reason":"AUTO_RESEARCH_SERVER_PUSH_HOLD_REQUIRED"}
+    saved=(knowledge.ensure()[0].get('records') or {}).get('controller_compute_batch') or {}
+    if saved.get('status') in ('PREPARED','COMPUTED'):
+        return {'action':'AUTO_RESEARCH_MANAGER_STAGE10','result':_run_frame_batch(resume=saved),'recovered':True,'automatic_promotion':False}
     sync=strategy_research.sync_new_pipeline_entries(); work=strategy_research.pipeline_work_status(); availability=_managed_availability(work)
     selection=task_queue.preview_auto_research_bucket(availability,bool(work.get("historical_backlog_mode")))
     if selection is None:
@@ -1262,9 +1342,13 @@ def main() -> None:
     parser.add_argument("--sleep-sec", type=int, default=60)
     parser.add_argument("--max-cycles", type=int, default=0)
     parser.add_argument("--checkpoint-seconds", type=int, default=0)
+    parser.add_argument("--time-budget-seconds", type=int, default=0)
+    parser.add_argument("--finish-margin-seconds", type=int, default=1800)
     args = parser.parse_args()
     if args.checkpoint_seconds and (args.checkpoint_seconds < 60 or not os.getenv("GITHUB_ACTIONS")):
         parser.error("checkpoint interval requires GitHub Actions and at least 60 seconds")
+    if args.time_budget_seconds and not 0<=args.finish_margin_seconds<args.time_budget_seconds<=18000:
+        parser.error("research time budget must exceed finish margin and not exceed 18000 seconds")
 
     if args.mode == "status":
         print(json.dumps(controller_status(), ensure_ascii=False, indent=2, default=str))
@@ -1328,10 +1412,15 @@ def main() -> None:
 
     if args.mode == "loop":
         cycles = 0
+        deadline=time.monotonic()+args.time_budget_seconds if args.time_budget_seconds else None
         while True:
-            print(json.dumps(one(), ensure_ascii=False, default=str), flush=True)
+            result=one()
+            print(json.dumps(result, ensure_ascii=False, default=str), flush=True)
             cycles += 1
+            if result.get('action')=='NO_NEW_BOUNDED_INPUT':break
             if args.max_cycles > 0 and cycles >= args.max_cycles:
+                break
+            if deadline is not None and time.monotonic()>=deadline-args.finish_margin_seconds:
                 break
             time.sleep(max(1, args.sleep_sec))
         return

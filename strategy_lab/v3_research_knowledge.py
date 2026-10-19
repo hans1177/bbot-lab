@@ -189,7 +189,11 @@ def complete_trial(n,result,status,overfit_risk="LOW"):
 def record_result(key,row,failed=False):
     k,_=ensure(); row=dict(row); row["updated_at"]=now()
     if failed:
-        k.setdefault("failed_research",[]).append(row); k["failed_research"]=k["failed_research"][-1000:]
+        rows=k.setdefault("failed_research",[])
+        row["record_key"]=key
+        if row.get("trial") is not None:
+            rows[:]=[old for old in rows if not (old.get("record_key")==key and old.get("trial")==row["trial"])]
+        rows.append(row); k["failed_research"]=rows[-1000:]
     else:
         k.setdefault("records",{})[key]=row
     k["updated_at"]=now(); atomic(KNOWLEDGE,k); write_runtime_summary(k)

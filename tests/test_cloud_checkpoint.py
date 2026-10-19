@@ -1,5 +1,5 @@
 # 파일명: tests/test_cloud_checkpoint.py
-import contextlib,hashlib,io,json,os,shutil,tempfile,unittest,zipfile,importlib.util
+import contextlib,hashlib,io,json,os,shutil,tempfile,unittest,zipfile,importlib.util,ast,argparse,sys,types
 from pathlib import Path
 from unittest.mock import patch
 import yaml
@@ -70,6 +70,32 @@ class CloudCheckpointTests(unittest.TestCase):
         self.publish()
         self.assertEqual(json.loads((self.base/'research-state-head.json').read_text()),{'head':'new-commit'})
         self.assertFalse(any('runtime-candidates' in path for path,_ in self.requests))
+    def test_controller_checkpoints_completed_cycles_under_lock(self):
+        node=next(n for n in ast.parse((REPO/'strategy_lab/research_controller.py').read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='main')
+        events=[];state={'locked':False,'clock':0}
+        @contextlib.contextmanager
+        def lock():
+            state['locked']=True
+            try:yield
+            finally:state['locked']=False
+        def record(event):
+            self.assertTrue(state['locked']);events.append(event)
+        def research(held):
+            record('research');return {'action':'AUTO_RESEARCH_MANAGER_STAGE10'}
+        def sleep(seconds):state['clock']+=60
+        ns={'argparse':argparse,'Path':Path,'os':os,'json':json,'lock':lock,
+            'PUSH_HOLD':types.SimpleNamespace(exists=lambda:True),
+            'managed_research_once':research,
+            'time':types.SimpleNamespace(monotonic=lambda:state['clock'],sleep=sleep),
+            'knowledge':types.SimpleNamespace(save_cloud_checkpoint=lambda:record('save'),publish_cloud_checkpoint=lambda:record('publish'))}
+        exec(compile(ast.Module(body=[node],type_ignores=[]),'actual_controller_main','exec'),ns)
+        for bounds in (['--max-cycles','2'],['--max-cycles','0','--time-budget-seconds','120','--finish-margin-seconds','60']):
+            with self.subTest(bounds=bounds):
+                events.clear();state['clock']=0
+                argv=['controller','--mode','loop','--enable-research','--checkpoint-seconds','60']+bounds
+                with patch.object(sys,'argv',argv),patch.dict(os.environ,{'GITHUB_ACTIONS':'true'}),contextlib.redirect_stdout(io.StringIO()):ns['main']()
+                self.assertEqual(events,['research','save','publish','research','save','publish'])
+                self.assertFalse(state['locked'])
     def test_changed_engine_rejected(self):
         self.save();(self.root/'strategy_lab/run_strategy.py').write_text('# changed engine')
         with self.assertRaisesRegex(RuntimeError,'CHECKPOINT_ENGINE_MISMATCH'):self.run_step('Restore exact research state')
@@ -95,7 +121,7 @@ class CloudCheckpointTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'CHECKPOINT_FILE_SET_MISMATCH'):self.run_step('Restore exact research state')
     def test_workflow_has_one_worker_and_no_checkout_credentials(self):
         self.assertFalse(WORKFLOW['concurrency']['cancel-in-progress'])
-        job=WORKFLOW['jobs']['research'];self.assertLessEqual(job['timeout-minutes'],55)
+        job=WORKFLOW['jobs']['research'];self.assertLessEqual(job['timeout-minutes'],350)
         checkout=next(s for s in job['steps'] if str(s.get('uses','')).startswith('actions/checkout@'))
         self.assertFalse(checkout['with']['persist-credentials'])
         self.assertEqual(job['env']['B_BOT_V3_SERVER_PUSH_HOLD'],'1')

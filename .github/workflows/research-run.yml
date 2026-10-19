@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       cycles:
-        description: Maximum complete research cycles
+        description: Maximum cycles; 0 uses the bounded research time budget
         type: choice
-        options: ['1', '4', '8']
+        options: ['0', '1', '4', '8']
         default: '1'
   schedule:
     - cron: '15 * * * *'
@@ -23,7 +23,7 @@ jobs:
   research:
     if: github.event_name != 'schedule' || github.event.repository.private == true
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 350
     env:
       BBOT_LOCAL_ROOT: ${{ github.workspace }}/cloud-research-workspace
       BBOT_AUTO_RESEARCH_MANAGER_V1: '1'
@@ -98,6 +98,7 @@ jobs:
           if (root/'ROADMAP_CONSTITUTION_V3.json').read_bytes()!=(repo/'ROADMAP_CONSTITUTION_V3.json').read_bytes():raise RuntimeError('RESEARCH_CONSTITUTION_MISMATCH')
           config_path=root/'strategy_lab/lab_config.json'
           config=json.loads(config_path.read_text(encoding='utf-8-sig'))
+          config['research_compute_workers']=3
           config['research_candidate_fill_timeframes']=['1H','6H','12H','1D','1W']
           config_path.write_text(json.dumps(config,indent=2))
           print('STARTUP_FRAMES=1H,6H,12H,1D,1W; 30M_DEFERRED_QUALIFIED_HISTORY_REQUIRED')
@@ -284,12 +285,12 @@ jobs:
       - name: Run existing research controller
         id: research
         env:
-          REQUESTED_CYCLES: ${{ inputs.cycles || '8' }}
+          REQUESTED_CYCLES: ${{ github.event_name == 'schedule' && '0' || inputs.cycles || '8' }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -o pipefail
-          case "$REQUESTED_CYCLES" in 1|4|8) ;; *) exit 40 ;; esac
-          python "$BBOT_LOCAL_ROOT/strategy_lab/research_controller.py" --mode loop --enable-research --max-cycles "$REQUESTED_CYCLES" --sleep-sec 1 --checkpoint-seconds 60 | tee "$RUNNER_TEMP/research-cycles.jsonl"
+          case "$REQUESTED_CYCLES" in 0|1|4|8) ;; *) exit 40 ;; esac
+          python "$BBOT_LOCAL_ROOT/strategy_lab/research_controller.py" --mode loop --enable-research --max-cycles "$REQUESTED_CYCLES" --sleep-sec 1 --checkpoint-seconds 60 --time-budget-seconds 18000 --finish-margin-seconds 1800 | tee "$RUNNER_TEMP/research-cycles.jsonl"
           python - <<'PY'
           import json,os
           from pathlib import Path
@@ -301,7 +302,7 @@ jobs:
                       yield from reasons(item)
               elif isinstance(value,list):
                   for item in value:yield from reasons(item)
-          if not rows or any(row.get('action')!='AUTO_RESEARCH_MANAGER_STAGE10' for row in rows):raise RuntimeError('CANONICAL_RESEARCH_NOT_EXECUTED')
+          if not rows or any(row.get('action') not in {'AUTO_RESEARCH_MANAGER_STAGE10','NO_NEW_BOUNDED_INPUT'} for row in rows):raise RuntimeError('CANONICAL_RESEARCH_NOT_EXECUTED')
           if any(reason in {'RUN_STRATEGY_FAIL','RESULT_NOT_FOUND'} for row in rows for reason in reasons(row)):raise RuntimeError('RESEARCH_EXECUTION_FAILED_CHECK_PRIVATE_EVIDENCE')
           print('RESEARCH_EXECUTION_AND_RESULTS_RECORDED; STRATEGY_QUALIFICATION_IS_SEPARATE')
           PY

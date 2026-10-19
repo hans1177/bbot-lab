@@ -3028,14 +3028,14 @@ def candidate_fill_priority():
     )
 
 
-def choose_next():
+def choose_next(timeframe=None, excluded_families=(), excluded_timeframes=()):
     done=completed_pairs(); files=family_files(); pending={}; done_counts={}
     for tf in TF_ORDER:
         pending[tf]=[]; done_counts[tf]=0
         for p in files:
             name=str(load_meta(p).get("name") or p.stem).upper()
             if (name,tf) in done: done_counts[tf]+=1
-            else: pending[tf].append(p)
+            elif (timeframe is None or tf == timeframe) and tf not in excluded_timeframes and name not in excluded_families: pending[tf].append(p)
     # CANDIDATE_FILL_PRIORITY_BINDING_V1
     fill_priority=candidate_fill_priority()
     tf=next((x for x in fill_priority if pending.get(x)),None)
@@ -3044,23 +3044,34 @@ def choose_next():
     if tf is None: return None
     return tf,pending[tf][0]
 
-def run_one():
-    nxt=choose_next()
-    if not nxt:return {"status":"BROAD_STANDALONE_COMPLETE","at":now()}
-    tf,path=nxt; wrapper,strategy_name,meta=wrapper_for(path,tf); base=str(meta.get("name") or path.stem).upper()
-    trial=knowledge.reserve_trial(f"V3_SINGLE_HP2016_2024_{base}_{tf}",base,tf,"SINGLE_FAMILY_HP2016_2024")
-    env=os.environ.copy(); env["BBOT_LOCAL_ROOT"]=str(ROOT)
-    research_start,research_end=hard_pass_dates()
-    env["BBOT_RESEARCH_DATASET_MODE"]="HARD_PASS_ONLY"
-    env["BBOT_RESEARCH_START"]=research_start
-    env["BBOT_RESEARCH_END"]=research_end
-    start=time.time()
-    p=subprocess.run([sys.executable,str(RUNNER),str(wrapper)],cwd=str(ROOT),env=env,text=True,encoding="utf-8",errors="replace",stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+def run_one(timeframe=None, excluded_families=(), prepare_only=False, task=None, process=None):
+    # 예약과 결과 반영은 컨트롤러 한 곳에서만 수행한다. 계산만 병렬 실행한다.
+    if task is None:
+        nxt=choose_next(timeframe, excluded_families)
+        if not nxt:return {"status":"BROAD_STANDALONE_COMPLETE","at":now()}
+        tf,path=nxt; wrapper,strategy_name,meta=wrapper_for(path,tf)
+        base=str(meta.get("name") or path.stem).upper()
+        trial=knowledge.reserve_trial(f"V3_SINGLE_HP2016_2024_{base}_{tf}",base,tf,"SINGLE_FAMILY_HP2016_2024")
+        research_start,research_end=hard_pass_dates()
+        task={"kind":"SINGLE", "timeframe":tf, "family":base, "trial":trial,
+              "source":str(wrapper.relative_to(ROOT)), "parent":str(path.relative_to(ROOT)),
+              "strategy_name":strategy_name, "source_sha256":_sha256_file(wrapper),
+              "started":time.time(), "env":{"BBOT_RESEARCH_DATASET_MODE":"HARD_PASS_ONLY",
+              "BBOT_RESEARCH_START":research_start,"BBOT_RESEARCH_END":research_end}}
+        if prepare_only:return task
+    tf=task["timeframe"]; base=task["family"]; trial=task["trial"]
+    wrapper=ROOT/task["source"]; path=ROOT/task["parent"]
+    strategy_name=task["strategy_name"]; start=task["started"]
+    if _sha256_file(wrapper)!=task["source_sha256"]:raise RuntimeError("PARALLEL_SOURCE_CHANGED")
+    if process is None:
+        env=os.environ.copy();env.update(task["env"],BBOT_LOCAL_ROOT=str(ROOT))
+        process=subprocess.run([sys.executable,str(RUNNER),str(wrapper)],cwd=str(ROOT),env=env,text=True,encoding="utf-8",errors="replace",stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=1800)
+    p=process
     if p.returncode!=0:
         knowledge.complete_trial(trial,"RUN_STRATEGY_FAIL","FAIL","UNKNOWN")
         knowledge.record_result(f"single:{base}:{tf}",{"strategy":base,"timeframe":tf,"trial":trial,"status":"FAIL","reason":"RUN_STRATEGY_FAIL","output_tail":p.stdout[-4000:]},failed=True)
         return {"status":"FAIL","trial":trial,"strategy":base,"timeframe":tf,"reason":"RUN_STRATEGY_FAIL"}
-    result=find_result(strategy_name,start)
+    result=ROOT/task["result_file"] if task.get("result_file") else find_result(strategy_name,start)
     if result is None:
         # RESULT_NOT_FOUND_REJECT_MEMORY_V1
         _result_not_found_source = locals().get('h')
