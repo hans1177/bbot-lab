@@ -1,0 +1,12 @@
+[Unit]
+Description=Poll user Telegram questions using reservation.py every fifteen seconds after completion
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=15s
+AccuracySec=5s
+Persistent=false
+Unit=telegram-readonly-query.service
+
+[Install]
+WantedBy=timers.target
