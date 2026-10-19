@@ -720,10 +720,70 @@ def _run_trailing_pair(state,target,stage3,item,pair,phase):
     }
 
 
+def _trailing_frozen_results_error(target, item):
+    """Authenticate each planned result before exact-version trailing selection.
+
+    Earlier checkpoint results are not exempt from the current exact-source
+    and pair binding contract. Validate original reports, not merely the
+    persisted Stage3 summary. Never access files outside the research root.
+    """
+    source=ROOT/str(target.get("canonical_source_file") or "")
+    tf=str(target.get("timeframe") or "").upper()
+    for plan_key, result_key in (
+        ("coarse_candidates","coarse_results"),
+        ("fine_candidates","fine_results"),
+    ):
+        pairs=item.get(plan_key) or []
+        results=item.get(result_key) or {}
+        if not isinstance(pairs,list) or not isinstance(results,dict):
+            return "TRAILING_FROZEN_RESULT_STRUCTURE_INVALID"
+        for pair in pairs:
+            if not isinstance(pair,dict):
+                return "TRAILING_FROZEN_PAIR_INVALID"
+            try:
+                key=_trailing_pair_key(pair.get("start_pct"),pair.get("callback_pct"))
+            except (TypeError,ValueError,OverflowError):
+                return "TRAILING_FROZEN_PAIR_INVALID"
+            row=results.get(key)
+            if not isinstance(row,dict) or row.get("status")!="MEASURED":
+                return "TRAILING_FROZEN_MEASUREMENT_MISSING"
+            try:
+                if (_trailing_pair_key(row.get("start_pct"),row.get("callback_pct"))!=key):
+                    return "TRAILING_FROZEN_PAIR_MISMATCH"
+            except (TypeError,ValueError,OverflowError):
+                return "TRAILING_FROZEN_PAIR_MISMATCH"
+            rel=str(row.get("result_json") or "").replace("\\","/")
+            if not rel or not rel.startswith("strategy_lab/results/v3/"):
+                return "TRAILING_FROZEN_RESULT_PATH_INVALID"
+            path=ROOT/rel
+            if (path.is_symlink() or not path.resolve().is_relative_to(ROOT.resolve())
+                or not path.is_file()):
+                return "TRAILING_FROZEN_RESULT_MISSING"
+            try:
+                if path.stat().st_size>32*1024**2:
+                    return "TRAILING_FROZEN_RESULT_TOO_LARGE"
+                report=load(path,{})
+            except (OSError,ValueError):
+                return "TRAILING_FROZEN_RESULT_UNREADABLE"
+            problem=_trailing_result_binding_error(report,target,pair,source)
+            if problem:
+                return "TRAILING_FROZEN_"+problem
+            if (report.get("research_window") or {}).get("mode")!="HARD_PASS_ONLY":
+                return "TRAILING_FROZEN_RESEARCH_WINDOW_INVALID"
+            metrics=_trailing_evidence(report,tf)
+            if (not isinstance(row.get("evidence"),dict)
+                or row["evidence"]!=metrics):
+                return "TRAILING_FROZEN_EVIDENCE_MISMATCH"
+    return None
+
+
 def _finalize_trailing_selection(state,target,stage3,item):
     source_error=_trailing_source_integrity_error(target)
     if source_error:
         return _block_trailing_source_drift(state,target,stage3,item,source_error)
+    evidence_error=_trailing_frozen_results_error(target,item)
+    if evidence_error:
+        return _block_trailing_source_drift(state,target,stage3,item,evidence_error)
     tf=str(target.get("timeframe") or "").upper()
     evaluations={}
     evaluations.update(item.get("coarse_results") or {})
