@@ -38,7 +38,7 @@ class ExactTrailingSourceIntegrityTests(unittest.TestCase):
             record_result=lambda *a,**kw:self.records.append((a,kw)),
             reserve_trial=lambda *a,**kw:self.fail("MUST_NOT_RESERVE_ON_SOURCE_DRIFT"),
         )
-        ns={"ROOT":self.root,"TRAILING_STAGE3":self.root/"stage3.json",
+        ns={"ROOT":self.root,"Path":Path,"TRAILING_STAGE3":self.root/"stage3.json",
             "re":re,"hashlib":hashlib,"math":math,
             "now":lambda:"2026-10-19T00:00:00Z",
             "atomic":lambda path,row:self.saved.append(("stage3",json.loads(json.dumps(row)))),
