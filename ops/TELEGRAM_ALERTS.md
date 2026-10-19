@@ -39,3 +39,17 @@
 \`python -B -m unittest tests.test_telegram_critical_watch tests.test_telegram_readonly_query -v\`
 
 전체 기존 CI 테스트·canonical 6 검증기 통과 전 병합하지 않는다.
+
+
+## 5분 정상 수신 reservation.py를 기준으로 통일 (승인·실서버 확인 전)
+
+사용자가 AWS에서 실행 중으로 추정되는 5분 보고 모듈 예약 파일 reservation.py를 제공했다. 이 파일의 기존 인터페이스에 5분 주기 전송, 기존 TELEGRAM_TOKEN/TELEGRAM_CHAT_ID, 바이낸스 계좌 조회, 보유 포지션, exit_history 통계, 전략별 성과, CYCLE 비교가 있다. **업로드 파일과 AWS 실제 파일의 동일성은 배포 전 해시 대조가 필요하다.**
+
+- 새로운 runtime/telegram_reservation_bridge.py가 서버의 reservation.py를 고정 경로에서 import하여, 실제 그 보고기가 로딩한 TELEGRAM_TOKEN/TELEGRAM_CHAT_ID를 그대로 사용한다. import는 기존 예약 main()과 5분 발송 반복문을 실행하지 않는다.
+- 별도 runtime/telegram_readonly_query.py --poll-once --use-reservation은 **명시적 선택**이 필요하다. private chat의 chat ID == 전송자 user ID 여부를 확인하며 getUpdates를 통해 질문에만 응답한다. 설치만으로 시작하지 않는다.
+- 서버 조회는 기존 reservation.account_summary / live_positions / build_strategy_stats / load_cycle_report 등에서 데이터를 읽는다. 예약 trade_stats()는 누적 통계 파일을 갱신하므로 호출하지 않는다. 대신 기존 읽기 전용 exit_history 및 통계 보조 함수를 사용하고 최근 최대 5000행 범위, 불완전 기록 건수를 표시한다.
+- 계좌 현황은 totalWalletBalance(지갑 잔고), availableBalance(가용 잔고), totalUnrealizedProfit(미실현 PnL)을 각각 명시한다. 지갑잔고+미실현손익은 잔고 계산값으로 제공하며 모든 계정 손익이나 실제 인출 가능 현금으로 혼동하지 않는다.
+- 전략 승률·청산 수익은 기존 예약 보고 기준이며 R4의 경제적 체결 증거·펀딩비·수수료 완결성을 재검증한 수치는 아니다. 데이터 없는 날 0%가 아니라 집계 대상 없음으로 표시한다.
+- 새 runtime/telegram_critical_watch.py는 reservation.py가 **존재하면 그와 같은 봇/개인 수신 대상**을 우선하여 사용하고, 없으면 기존 환경설정 전송 경로만 사용한다. 기존 배포된 Watch 코드를 변경하거나 테스트를 재전송하려면 **서버 실제 파일 해시 일치, 검증된 배포 커밋, 개인 수신 확인**이 선행되어야 한다.
+- 기존 reservation.py, server_status_telegram.py, 기존 cron 및 모든 R4 거래 모듈을 **절대 자동 변경하지 않는다**. 현재 AWS에 테스트된 초기 Watch 버전만 저장돼 있으며 타이머는 아직 활성화되지 않았다.
+- 배포 전 사전 점검: reservation.py 실제 존재 여부와 SHA256, import 성공 여부, getUpdates webhook 또는 기존 소비자 존재 여부를 비밀정보 출력 없이 확인. 기존 5분 발신 메시지와 새 테스트가 동일 채팅에서 실제로 도착하는지 반드시 확인. 그 전엔 5분/30분 보고를 중단하지 않는다.
