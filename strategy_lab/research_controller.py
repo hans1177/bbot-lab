@@ -599,8 +599,13 @@ def _run_search_candidate_one():
         manifest=candidate_wave.wave(tf,search_contract=contract)
         pending=[r for r in manifest['candidates'] if (str(r['name']).upper(),tf) not in done]
         if not pending:continue
-        row=hypothesis_factory.run_one(candidate=pending[0])
-        _record_strategy_track('AUTO_MANAGER_GENETIC_OPTUNA_FIXED_WINDOW',row)
+        task=hypothesis_factory.run_one(candidate=pending[0],prepare_only=True)
+        batch={'schema':'B_BOT_CONTROLLER_COMPUTE_BATCH_V1','status':'PREPARED',
+            'bindings':{name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
+                        for name in ('ROADMAP_CONSTITUTION_V3.json','strategy_lab/run_strategy.py','INPUT_RECEIPT.json')},
+            'tasks':[task]}
+        knowledge.record_result('controller_compute_batch',batch)
+        row=_run_frame_batch(resume=batch)['results'][0]
         knowledge.record_result('candidate_search_rotation',{'cursor':(index+1)%len(contracts)})
         return {'status':'DONE','action':'SEALED_SEARCH_CANDIDATE_RESEARCH','result':row,
                 'wave_id':manifest['wave_id'],'timeframe':tf,'automatic_promotion':False}

@@ -33,12 +33,25 @@ class SearchAllocationTests(unittest.TestCase):
         self.assertEqual(records,{})
 
     def test_search_frames_rotate_and_completed_candidates_are_skipped(self):
+        temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
+        root=Path(temp.name);(root/'strategy_lab').mkdir()
+        for name in ('ROADMAP_CONSTITUTION_V3.json','strategy_lab/run_strategy.py','INPUT_RECEIPT.json'):
+            (root/name).write_text('{}')
         records={};done=set();seen=[]
         contracts=[{'timeframe':tf} for tf in ('1H','6H','12H')]
-        def run(candidate):
-            key=(candidate['name'],candidate['timeframe']);seen.append(key);done.add(key);return {'status':'FAIL'}
+        def run(candidate,prepare_only=False):
+            self.assertTrue(prepare_only)
+            return dict(candidate)
+        def finalize(resume):
+            self.assertEqual(records['controller_compute_batch'],resume)
+            self.assertEqual(resume['status'],'PREPARED')
+            self.assertEqual(len(resume['bindings']),3)
+            candidate=resume['tasks'][0]
+            key=(candidate['name'],candidate['timeframe']);seen.append(key);done.add(key)
+            return {'results':[{'status':'FAIL'}]}
         wave=types.SimpleNamespace(wave=lambda tf,search_contract:{'wave_id':tf,'candidates':[{'name':'A','timeframe':tf}]})
         ns={'knowledge':types.SimpleNamespace(ensure=lambda:({'records':records},{}),record_result=lambda k,v:records.update({k:v})),
+            'ROOT':root,'hashlib':hashlib,'_run_frame_batch':finalize,
             '_search_contracts':lambda:contracts,'hypothesis_factory':types.SimpleNamespace(completed_pairs=lambda:done,run_one=run),
             '_record_strategy_track':lambda *args:None}
         functions(REPO/'strategy_lab/research_controller.py',{'_run_search_candidate_one'},ns)

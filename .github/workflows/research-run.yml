@@ -1,5 +1,5 @@
 name: Research runtime
-# Saved compute receipts restore their original training window before finalization.
+# Basic and GA proposal validation share saved compute receipts and training-window restoration.
 # Keep scheduled research independent of development sessions; never cancel a running job.
 on:
   push:
