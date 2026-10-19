@@ -58,7 +58,8 @@ class RuntimeFeedbackTests(unittest.TestCase):
     def test_github_diagnostics_reports_six_instances_and_live_exit_proofs(self):
         config=json.loads(self.config.read_text())
         config['r4_runtime']={'strategy_instances':{
-            'SI_'+str(i):{'strategy_id':'TEST','timeframe':'12H','tier':'CANARY',
+            'SI_'+str(i):{'strategy_id':'EMA_CROSS+SAR' if i==5 else 'TEST',
+                           'timeframe':'12H','tier':'CANARY',
                            'enabled':True,'entry_enabled':True}
             for i in range(6)}}
         self.config.write_text(json.dumps(config))
@@ -81,6 +82,8 @@ class RuntimeFeedbackTests(unittest.TestCase):
         obs=diag['evaluations']
         self.assertEqual(obs['state'],'OBSERVED_FRESH')
         self.assertEqual(len(obs['instances']),6)
+        self.assertEqual(len(diag['ledger']['instances']),6)
+        self.assertTrue(any(row['strategy']=='EMA_CROSS+SAR' for row in diag['ledger']['instances']))
         tracked=next(x for x in obs['instances'] if x['instance']=='SI_0')
         self.assertEqual(tracked['entry_result'],'ENTRY_GATE_NO_ALLOW')
         self.assertEqual(tracked['exit_result'],'NO_OPPOSITE')
