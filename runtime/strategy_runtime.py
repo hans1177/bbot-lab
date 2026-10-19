@@ -1068,7 +1068,7 @@ def publish_github_feedback(candidates, received_commit):
     diag['sources']={}
     for name in ('collector.py','gate.py','late_entry.py','risk_engine.py','order.py',
                  'r4_runtime_service.py','r4_user_stream.py','multi_strategy_runtime.py',
-                 'strategy_leg_ledger.py','strategy_runtime.py'):
+                 'strategy_leg_ledger.py','strategy_runtime.py','server_status_telegram.py','monitor.py'):
         source=BASE/name
         if source.is_symlink():
             diag['sources'][name]={'state':'SYMLINK_FORBIDDEN'}
@@ -1134,6 +1134,20 @@ def publish_github_feedback(candidates, received_commit):
             observed('storage','DATABASE_READ_FAILED')
         finally:
             if connection is not None:connection.close()
+    # 웹소켓/전략/텔레그램은 기존 로그의 타입과 시각만 파악한다.
+    # 서비스 상태나 과거 체결을 현재 WS 연결 또는 신호 평가의 직접 증거로 간주하지 않는다.
+    ws_positive={'WS_CONNECTED','WS_RECONNECTED','WS_KEEPALIVE_OK','WS_MESSAGE_RECEIVED',
+                 'WS_ORDER_UPDATE','WS_ACCOUNT_UPDATE','USER_STREAM_CONNECTED','USER_STREAM_EVENT'}
+    ws_negative={'WS_DISCONNECTED','WS_KEEPALIVE_FAIL','WS_RECONNECT_FAILED','WS_ERROR',
+                 'USER_STREAM_DISCONNECTED','USER_STREAM_ERROR'}
+    signal_tags={'ENTRY_RESULT','ENTRY_BLOCK','STRATEGY_EXIT'}
+    counters={'websocket':{},'signal':{},'telegram':{'sent_ok':0,'send_failed':0}}
+    last_seen={'websocket':0,'signal':0,'telegram_ok':0,'telegram_failed':0}
+    by_instance={row['instance']:row for row in diag['ledger']['instances']}
+    for row in by_instance.values():
+        row['diagnostic_entry_results']=0
+        row['diagnostic_entry_blocks']=0
+        row['evaluation_heartbeat_observed']=False
     log=BASE/'logs/runner.log'
     if log.is_file() and not log.is_symlink():
         try:
@@ -1146,7 +1160,52 @@ def publish_github_feedback(candidates, received_commit):
                 if match and any(term in match.group(1) for term in ('FAIL','ERROR','LOCK','RECON','WS_','BLOCK')):
                     tags=diag['errors']['tags'];tag=match.group(1)
                     if tag in tags or len(tags)<32:tags[tag]=tags.get(tag,0)+1
+                # 로그 타임스탬프가 없으면 증거는 건수만 기록하고 최신성은 판단하지 않는다.
+                clock=re.match(r'^(20\d{2}-\d\d-\d\d)[ T](\d\d:\d\d:\d\d)',row)
+                event_ts=0
+                if clock:
+                    try:
+                        event_ts=int(time.mktime(time.strptime(clock.group(1)+' '+clock.group(2),'%Y-%m-%d %H:%M:%S')))
+                        if not 0<=stamp-event_ts<=7*86400:event_ts=0
+                    except (ValueError,OverflowError,OSError):event_ts=0
+                if match:
+                    tag=match.group(1)
+                    if tag in ws_positive or tag in ws_negative:
+                        counts=counters['websocket'];counts[tag]=counts.get(tag,0)+1
+                        last_seen['websocket']=max(last_seen['websocket'],event_ts)
+                    if tag in signal_tags:
+                        counts=counters['signal'];counts[tag]=counts.get(tag,0)+1
+                        last_seen['signal']=max(last_seen['signal'],event_ts)
+                        iid=re.search(r'\binstance=([A-Za-z0-9_.:-]{1,160})(?=\s|$)',row)
+                        if iid and iid.group(1) in by_instance:
+                            info=by_instance[iid.group(1)]
+                            if tag=='ENTRY_RESULT':info['diagnostic_entry_results']+=1
+                            if tag=='ENTRY_BLOCK':info['diagnostic_entry_blocks']+=1
+                # 텔레그램 토큰, chat_id, 요청 URL, 메시지 내용은 읽거나 업로드하지 않는다.
+                if '[주문][SERVER_STATUS_TELEGRAM] sent ok ' in row:
+                    counters['telegram']['sent_ok']+=1
+                    last_seen['telegram_ok']=max(last_seen['telegram_ok'],event_ts)
+                elif '[주문][SERVER_STATUS_TELEGRAM] fail err=' in row:
+                    counters['telegram']['send_failed']+=1
+                    last_seen['telegram_failed']=max(last_seen['telegram_failed'],event_ts)
         except OSError:pass
+    if counters['websocket']:
+        observed('websocket','FAILURE_EVENTS_OBSERVED' if any(k in ws_negative for k in counters['websocket']) else 'LOG_EVENTS_OBSERVED',
+                 log_event_counts=counters['websocket'],last_log_event_epoch=last_seen['websocket'],
+                 direct_connection_heartbeat=False,log_window='TAIL_400_LINES')
+    if counters['signal']:
+        observed('signal','PARTIAL_LOG_EVIDENCE',
+                 log_event_counts=counters['signal'],last_log_event_epoch=last_seen['signal'],
+                 direct_evaluation_heartbeat=False,log_window='TAIL_400_LINES')
+    telegram_sources=[name for name in ('server_status_telegram.py','monitor.py') if diag['sources'][name]['state']=='AVAILABLE']
+    tg=counters['telegram']
+    telegram_state=('SEND_FAILURE_LOGGED' if tg['send_failed'] and last_seen['telegram_failed']>=last_seen['telegram_ok']
+                    else 'SEND_OK_LOGGED' if tg['sent_ok'] else 'SEND_FAILURE_LOGGED' if tg['send_failed']
+                    else 'NO_SEND_EVIDENCE' if telegram_sources else 'SOURCE_NOT_FOUND')
+    observed('telegram',telegram_state,source_files=telegram_sources,
+             send_ok_count=tg['sent_ok'],send_failure_count=tg['send_failed'],
+             last_send_ok_epoch=last_seen['telegram_ok'],last_send_failure_epoch=last_seen['telegram_failed'],
+             message_delivery_verified=False,log_window='TAIL_400_LINES')
     diag_raw=json.dumps(diag,sort_keys=True,allow_nan=False).encode()
     if len(diag_raw)>128*1024:raise RuntimeError('FEEDBACK_DIAGNOSTIC_LIMIT')
     payloads={'HEARTBEAT.json':json.dumps(heartbeat,sort_keys=True).encode(),'MARKET.json':json.dumps(market,sort_keys=True,allow_nan=False).encode(),'CONFIG.json':config_raw,'DIAGNOSTICS.json':diag_raw}
