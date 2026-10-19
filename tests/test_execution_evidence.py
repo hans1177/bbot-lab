@@ -321,6 +321,29 @@ class ExecutionEvidenceTests(unittest.TestCase):
         return extract('r4_exchange_adapter.py','_normalize_order')(dummy,'BTCUSDT',dict(orderId=17,status='FILLED',executedQty='10',avgPrice='100',side='BUY'))
     def trades(self):
         return [dict(symbol='BTCUSDT',orderId=17,id=1,time=1792140000000,qty='10',price='100',commission='0.1',commissionAsset='USDT',marginAsset='USDT',realizedPnl='0',side='BUY')]
+    def test_r4_invalid_signal_side_is_blocked_before_entry_plan(self):
+        # 파일명: test_execution_evidence.py / 실제 cycle의 검증식을 실행, 주문 경로보다 앞에 있는지 확인한다.
+        tree=ast.parse((ROOT/'r4_runtime_service.py').read_text())
+        cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='R4RuntimeService')
+        cycle=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='cycle')
+        guard=next(n for n in ast.walk(cycle) if isinstance(n,ast.If)
+                   and isinstance(n.test,ast.Compare)
+                   and any(isinstance(op,ast.NotIn) for op in n.test.ops)
+                   and 'result.get' in ast.unparse(n.test)
+                   and "'side'" in ast.unparse(n.test)
+                   and "'BUY'" in ast.unparse(n.test))
+        self.assertTrue(any(isinstance(node,ast.Continue) for node in guard.body))
+        plan_calls=[n for n in ast.walk(cycle) if isinstance(n,ast.Call)
+                    and isinstance(n.func,ast.Attribute) and n.func.attr=='_plan']
+        self.assertTrue(plan_calls)
+        self.assertLess(guard.lineno,max(n.lineno for n in plan_calls))
+        expr=compile(ast.fix_missing_locations(ast.Expression(guard.test)),'guard','eval')
+        for side in ('BUY','SELL'):
+            self.assertFalse(eval(expr,{},dict(result={'side':side})),side)
+        for side in ('','buy','sell','HOLD','UNKNOWN',None):
+            self.assertTrue(eval(expr,{},dict(result={'side':side})),side)
+        self.assertTrue(eval(expr,{},dict(result={})))
+
     def test_r4_long_short_live_order_routing_without_network(self):
         # 파일명: test_execution_evidence.py / 실제 주문 전송 없이 LONG/SHORT 매핑을 검증한다.
         # R4 거래소 어댑터의 주문 메서드를 그대로 사용하고 API를 캡처만 한다.
