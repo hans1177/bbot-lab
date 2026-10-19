@@ -147,6 +147,35 @@ class ExecutionEvidenceTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertNotIn('verified_exchange_leverage_x',verified)
 
+    def test_legacy_exit_without_accounted_stub_stays_out_of_recovery(self):
+        with self.ledger.transaction() as con:
+            con.execute('UPDATE r4_active_legs SET policy_snapshot=? WHERE leg_id=?',
+                        (json.dumps({'leverage':10}),self.intent['leg_id']))
+        self.fill()
+        exit_intent=self.ledger.reserve_exit(self.intent['leg_id'],'without-stub',10,'TRAILING')
+        self.ledger.mark_exit_submitted(exit_intent['exit_intent_id'],'19')
+        self.ledger.confirm_exit_fill(
+            exit_intent['exit_intent_id'],'TRADE:3:19',10,110,
+            exchange_order_id='19')
+        self.assertEqual(self.ledger.pending_exit_intents(evidence_only=True),[])
+
+    def test_verified_exit_without_stub_retains_original_recovery_eligibility(self):
+        self.fill()
+        exit_intent=self.ledger.reserve_exit(self.intent['leg_id'],'verified-exit',10,'TRAILING')
+        self.ledger.mark_exit_submitted(exit_intent['exit_intent_id'],'19')
+        self.ledger.confirm_exit_fill(
+            exit_intent['exit_intent_id'],'TRADE:3:19',10,110,
+            exchange_order_id='19')
+        targets=self.ledger.pending_exit_intents(evidence_only=True)
+        self.assertEqual([r['exit_intent_id'] for r in targets],[exit_intent['exit_intent_id']])
+
+    def test_legacy_unlinked_stub_evidence_is_not_sufficient(self):
+        self.legacy_exit_stub()
+        self.assertEqual(len(self.ledger.pending_exit_intents(evidence_only=True)),1)
+        with self.ledger.transaction() as con:
+            con.execute("DELETE FROM r4_leg_events WHERE event_type='EXIT_FILL'")
+        self.assertEqual(self.ledger.pending_exit_intents(evidence_only=True),[])
+
     def test_legacy_exit_evidence_enrichment_does_not_repeat_closed_quantity(self):
         from multi_strategy_runtime import MultiStrategyRuntime
         target=self.legacy_exit_stub()
