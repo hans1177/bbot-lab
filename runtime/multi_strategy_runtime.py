@@ -78,9 +78,18 @@ class MultiStrategyRuntime:
                     policy_snapshot, capacity_limit_units, tier_leg_limit,
                 )
             except RuntimeError as exc:
-                if str(exc) not in {"FRAME_STRATEGY_SLOTS_FULL", "FRAME_STRATEGY_VERSION_OCCUPIED", "OPPOSITE_SIDE_MULTI_LEG_DISABLED", "TIER_LEG_LIMIT_REACHED"}:
+                # 파일명: multi_strategy_runtime.py / 원장의 실제 보유 수 제한 오류를 정상 진입 차단으로 처리.
+                reason = str(exc)
+                blocking_reasons = {
+                    "FRAME_STRATEGY_SLOTS_FULL",
+                    "FRAME_STRATEGY_VERSION_OCCUPIED",
+                    "OPPOSITE_SIDE_MULTI_LEG_DISABLED",
+                }
+                if reason not in blocking_reasons and not reason.startswith(
+                    "TIER_CONCURRENT_LEG_LIMIT:"
+                ):
                     raise
-                return {"status": "ENTRY_BLOCKED", "reason": str(exc), "intent": {}}
+                return {"status": "ENTRY_BLOCKED", "reason": reason, "intent": {}}
 
             if intent["status"] in (
                 "SUBMITTED",
