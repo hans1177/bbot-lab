@@ -236,24 +236,34 @@ def write_runtime_summary(k=None):
 # ============================================================
 
 def _p0_checkpoint_gate_snapshot(gate):
-    """Evidence-only gate summary. Missing or malformed gates never become PASS."""
+    """Read-only gate diagnostics; neither a failure flag nor a PASS is inferred."""
     if not isinstance(gate,dict):
-        return {"evaluated":False,"pass":False,"decision":"NOT_EVALUATED","reasons":[]}
+        return {"evaluated":False,"pass":False,"decision":"NOT_EVALUATED",
+                "pass_mode":"NONE","reasons":[],"compensation_flags":[],
+                "compensation_strengths":[]}
     reasons=gate.get("absolute_fail_reasons") or gate.get("reasons") or []
     if not isinstance(reasons,list):reasons=[]
+    boundary=gate.get("compensation_flags") or []
+    strengths=gate.get("compensation_strengths") or []
+    if not isinstance(boundary,list):boundary=[]
+    if not isinstance(strengths,list):strengths=[]
     return {
         "evaluated":bool(gate),
         "pass":gate.get("pass") is True,
         "decision":str(gate.get("decision") or "NOT_EVALUATED")[:80],
+        "pass_mode":str(gate.get("pass_mode") or "NONE")[:80],
         "reasons":[str(reason)[:120] for reason in reasons[:8]],
+        "compensation_flags":[str(flag)[:120] for flag in boundary[:8]],
+        "compensation_strengths":[str(flag)[:120] for flag in strengths[:8]],
     }
 
 
 def _p0_checkpoint_stage_snapshot(pipeline, pipeline_sha256):
-    """Read-only P0 progress attached to the *same verified zipped stage2 bytes*.
+    """Read-only P0 progress from the exact stage2 bytes archived in this checkpoint.
 
-    This is diagnostic metadata only, never a server candidate or certification.
-    Sealed-blind measurement contents and private evidence are not published here.
+    Follow only authenticated parent/child exact-version links. A superseded
+    root must not conceal the current descendant's failure diagnostics.
+    This summary never changes research evidence or authorizes server release.
     """
     from collections import Counter
     baseline={
@@ -266,7 +276,8 @@ def _p0_checkpoint_stage_snapshot(pipeline, pipeline_sha256):
     }
     entries=pipeline.get("entries") if isinstance(pipeline,dict) else None
     if not isinstance(entries,list):
-        return dict(baseline,status="PIPELINE_EVIDENCE_INVALID",stage_counts={},leading=None)
+        return dict(baseline,status="PIPELINE_EVIDENCE_INVALID",stage_counts={},
+                    leading=None,leading_lineage=[],leading_current=None)
     valid=[row for row in entries if isinstance(row,dict) and row.get("eligible") is True]
     counts=Counter(str(row.get("pipeline_stage") or "UNKNOWN") for row in valid)
     complete=sum(
@@ -279,24 +290,49 @@ def _p0_checkpoint_stage_snapshot(pipeline, pipeline_sha256):
     )
     target=next((row for row in valid
                  if str(row.get("exact_strategy_version") or "")==baseline["leading_exact_version"]),None)
-    leading=None
-    if target is not None:
-        leading={
-            "strategy_id":str(target.get("strategy_id") or "")[:120],
-            "exact_strategy_version":baseline["leading_exact_version"],
-            "timeframe":str(target.get("timeframe") or "")[:16],
-            "pipeline_stage":str(target.get("pipeline_stage") or "UNKNOWN")[:100],
-            "last_error":str(target.get("last_error") or "")[:180],
-            "final_risk_gate":_p0_checkpoint_gate_snapshot(target.get("final_risk_gate")),
-            "full_validation_gate":_p0_checkpoint_gate_snapshot(target.get("full_validation_gate")),
-            "sealed_final_blind_gate":_p0_checkpoint_gate_snapshot(target.get("sealed_final_blind_gate")),
+    lineage=[]
+    current=target
+    visited=set()
+    while isinstance(current,dict) and len(lineage)<12:
+        version=str(current.get("exact_strategy_version") or "")
+        if not version or version in visited:
+            break
+        if (current.get("strategy_id")!=target.get("strategy_id")
+            or current.get("timeframe")!=target.get("timeframe")):
+            break
+        visited.add(version)
+        lineage.append({
+            "strategy_id":str(current.get("strategy_id") or "")[:120],
+            "exact_strategy_version":version[:120],
+            "parent_exact_strategy_version":str(current.get("parent_exact_strategy_version") or "")[:120],
+            "timeframe":str(current.get("timeframe") or "")[:16],
+            "pipeline_stage":str(current.get("pipeline_stage") or "UNKNOWN")[:100],
+            "last_error":str(current.get("last_error") or "")[:180],
+            "redevelopment_gate":str(current.get("redevelopment_gate") or "")[:80],
+            "final_risk_gate":_p0_checkpoint_gate_snapshot(current.get("final_risk_gate")),
+            "full_validation_gate":_p0_checkpoint_gate_snapshot(current.get("full_validation_gate")),
+            "sealed_final_blind_gate":_p0_checkpoint_gate_snapshot(current.get("sealed_final_blind_gate")),
             "redevelopment_cycles_by_gate":{
-                str(k)[:80]:int(v) for k,v in (target.get("redevelopment_cycles_by_gate") or {}).items()
+                str(k)[:80]:int(v) for k,v in (current.get("redevelopment_cycles_by_gate") or {}).items()
                 if isinstance(v,int) and not isinstance(v,bool)
             },
-        }
+        })
+        child_version=str(current.get("redevelopment_child_exact_version") or "")
+        if not child_version or child_version in visited:
+            break
+        child=next((row for row in valid
+                    if str(row.get("exact_strategy_version") or "")==child_version
+                    and str(row.get("parent_exact_strategy_version") or "")==version
+                    and row.get("strategy_id")==target.get("strategy_id")
+                    and row.get("timeframe")==target.get("timeframe")),None)
+        if child is None:
+            break
+        current=child
     return dict(baseline,status="RESEARCH_STAGE_ONLY",stage_counts=dict(sorted(counts.items())),
-                leading=leading,research_full_and_sealed_blind_pass_count=complete)
+                leading=lineage[0] if lineage else None,
+                leading_lineage=lineage,
+                leading_current=lineage[-1] if lineage else None,
+                research_full_and_sealed_blind_pass_count=complete)
 
 
 def save_cloud_checkpoint():
