@@ -512,10 +512,57 @@ def _ensure_stage3_entry(stage3,target):
     return item
 
 
+def _trailing_source_integrity_error(target):
+    """Fail closed before measuring or selecting an exact-version trailing policy."""
+    rel=str(target.get("canonical_source_file") or "").replace("\\","/")
+    expected=str(target.get("source_sha256") or "").lower()
+    if not rel or not re.fullmatch(r"[0-9a-f]{64}",expected):
+        return "TRAILING_EXACT_SOURCE_BINDING_MISSING"
+    original=ROOT/rel
+    source=original.resolve()
+    if (original.is_symlink() or not source.is_relative_to(ROOT.resolve())
+        or not source.is_file()):
+        return "TRAILING_CANONICAL_SOURCE_UNAVAILABLE"
+    try:
+        digest=hashlib.sha256(source.read_bytes()).hexdigest()
+    except OSError:
+        return "TRAILING_CANONICAL_SOURCE_UNAVAILABLE"
+    if digest!=expected:
+        return "TRAILING_EXACT_SOURCE_HASH_MISMATCH"
+    return None
+
+
+def _block_trailing_source_drift(state,target,stage3,item,reason):
+    """Quarantine the affected exact version without stalling other candidates."""
+    target["pipeline_stage"]="INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE"
+    target["last_error"]=reason
+    target["direct_canary_allowed"]=False
+    target["last_checked_at"]=now()
+    item["status"]="INCOMPLETE"
+    item["source_integrity_error"]=reason
+    item["last_checked_at"]=now()
+    _save_historical_stage2(state)
+    atomic(TRAILING_STAGE3,stage3)
+    knowledge.record_result(
+        f"pipeline_trailing_integrity:{target.get('strategy_id')}:{target.get('timeframe')}:{target.get('exact_strategy_version')}",
+        {"strategy_id":target.get("strategy_id"),
+         "exact_strategy_version":target.get("exact_strategy_version"),
+         "pipeline_stage":target["pipeline_stage"],"reason":reason,
+         "automatic_promotion":False,"canary_eligible":False},
+        failed=True,
+    )
+    return {"status":"FAIL","reason":reason,
+            "strategy_id":target.get("strategy_id"),
+            "exact_strategy_version":target.get("exact_strategy_version"),
+            "timeframe":target.get("timeframe"),
+            "pipeline_stage":target["pipeline_stage"],"automatic_promotion":False}
+
+
 def _run_trailing_pair(state,target,stage3,item,pair,phase):
+    source_error=_trailing_source_integrity_error(target)
+    if source_error:
+        return _block_trailing_source_drift(state,target,stage3,item,source_error)
     source=ROOT/str(target.get("canonical_source_file") or "")
-    if not source.is_file():
-        return {"status":"FAIL","reason":"CANONICAL_SOURCE_FILE_MISSING","source":str(source)}
     tf=str(target.get("timeframe") or "").upper()
     strategy_id=str(target.get("strategy_id") or "").upper()
     exact_version=str(target.get("exact_strategy_version") or "")
@@ -624,6 +671,9 @@ def _run_trailing_pair(state,target,stage3,item,pair,phase):
 
 
 def _finalize_trailing_selection(state,target,stage3,item):
+    source_error=_trailing_source_integrity_error(target)
+    if source_error:
+        return _block_trailing_source_drift(state,target,stage3,item,source_error)
     tf=str(target.get("timeframe") or "").upper()
     evaluations={}
     evaluations.update(item.get("coarse_results") or {})
