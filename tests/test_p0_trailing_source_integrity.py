@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -61,7 +62,7 @@ class ExactTrailingSourceIntegrityTests(unittest.TestCase):
         exec(compile(ast.Module(body=funcs,type_ignores=[]),"isolated_exact_trailing","exec"),ns)
         self.ns=ns
 
-    def simulated_report_run(self, report):
+    def simulated_report_run(self, report, runner=None):
         """Run only the isolated result-binding segment; no real backtest."""
         completed=[]
         self.knowledge.reserve_trial=lambda *args,**kw:17
@@ -73,7 +74,8 @@ class ExactTrailingSourceIntegrityTests(unittest.TestCase):
             "hard_pass_dates":lambda:("2016-01-01","2024-12-31"),
             "_trailing_pair_key":lambda *args:"PAIR",
             "time":SimpleNamespace(time=lambda:1.0),
-            "subprocess":SimpleNamespace(PIPE=-1,STDOUT=-2,run=lambda *args,**kw:SimpleNamespace(returncode=0,stdout="")),
+            "subprocess":SimpleNamespace(PIPE=-1,STDOUT=-2,TimeoutExpired=subprocess.TimeoutExpired,
+                run=runner or (lambda *args,**kw:SimpleNamespace(returncode=0,stdout=""))),
             "find_result":lambda *args:self.root/"strategy_lab/results/v3/synthetic.json",
             "load":lambda *args:report,
             "_trailing_evidence":lambda *args:{"trades":500,"expectancy_pct":0.1},
@@ -86,6 +88,34 @@ class ExactTrailingSourceIntegrityTests(unittest.TestCase):
     def good_report(self):
         return {"strategy_file":str(self.source),
                 "individual_trailing_research":{"start_pct":3.0,"callback_pct":1.0}}
+
+    def test_trailing_subprocess_has_bounded_runtime(self):
+        calls=[]
+        def run(*args,**kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(returncode=0,stdout="")
+        result,_=self.simulated_report_run(self.good_report(),runner=run)
+        self.assertEqual(result["status"],"MEASURED")
+        self.assertEqual(len(calls),1)
+        self.assertEqual(calls[0]["timeout"],1800)
+        self.assertEqual(self.target["pipeline_stage"],"INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING")
+
+    def test_trailing_timeout_is_candidate_local_fail_closed(self):
+        def run(*args,**kwargs):
+            self.assertEqual(kwargs["timeout"],1800)
+            raise subprocess.TimeoutExpired(cmd=args[0],timeout=kwargs["timeout"])
+        result,completed=self.simulated_report_run(self.good_report(),runner=run)
+        self.assertEqual(result["status"],"FAIL")
+        self.assertEqual(result["reason"],"TRAILING_RUN_TIMEOUT")
+        self.assertEqual(self.target["pipeline_stage"],"INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE")
+        self.assertFalse(self.target["direct_canary_allowed"])
+        self.assertEqual(self.item["status"],"INCOMPLETE")
+        entry=self.item["fine_results"]["PAIR"]
+        self.assertEqual(entry["status"],"RUNTIME_FAIL")
+        self.assertEqual(entry["reason"],"TRAILING_RUN_TIMEOUT")
+        self.assertEqual(completed[0][2],"FAIL")
+        self.assertTrue(self.records[0][1]["failed"])
+        self.assertFalse(result["automatic_promotion"])
 
     def test_valid_source_and_pair_are_recorded_as_measured(self):
         result,completed=self.simulated_report_run(self.good_report())
