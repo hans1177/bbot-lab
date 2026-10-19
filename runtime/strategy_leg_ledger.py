@@ -819,7 +819,8 @@ class StrategyLegLedger:
                             "source_event_id": f"EXTERNAL_TRADE:{symbol}:{trade_id}",
                             "trade_id": trade_id,
                             "order_id": fill.get("order_id"),
-                            "exchange_ts": int(fill["trade_time_ms"]),
+                            # 바이낸스 체결 시각은 ms, 증거 계약 exchange_ts는 seconds.
+                            "exchange_ts": int(fill["trade_time_ms"]) // 1000,
                             "qty_text": fill.get("qty_text") or "",
                             "price_text": fill.get("price_text") or "",
                             "fee_text": fill.get("fee_text"),
