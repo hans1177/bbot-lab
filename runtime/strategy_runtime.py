@@ -1070,6 +1070,8 @@ def publish_github_feedback(candidates, received_commit):
     observed('exit_fill','NO_DIRECT_EVIDENCE')
     observed('recovery','NO_DIRECT_EVIDENCE')
     observed('storage','NO_DIRECT_EVIDENCE')
+    diag['positions']={'state':'UNAVAILABLE','rows':[],'limit':256,'truncated':False,
+                       'source':'READ_ONLY_STRATEGY_LEDGER','exchange_live_verified':False}
     config_instances=(config.get('r4_runtime') or {}).get('strategy_instances') or {}
     for iid,entry in list(config_instances.items())[:64]:
         if not isinstance(entry,dict):continue
@@ -1142,12 +1144,46 @@ def publish_github_feedback(candidates, received_commit):
                 proofs=list(connection.execute('SELECT kind,evidence_complete,hard_fail FROM r4_trade_evidence ORDER BY id DESC LIMIT 96'))
                 diag['ledger']['proofs']={'sample_size':len(proofs),'incomplete':sum(not bool(x[1]) for x in proofs),'hard_fail':sum(bool(x[2]) for x in proofs)}
                 if any(x[2] for x in proofs):observed('storage','HARD_FAIL_EVIDENCE',sample_size=len(proofs))
+            # 보유 포지션: 원장 보유량만 읽고 오래된 진입부터 정렬한다.
+            # 가격은 최근 관찰값이며 거래소 실시간 평가손익이나 반전 지시가 아니다.
+            if {'r4_active_legs','r4_leg_trailing','r4_fills'}<=tables:
+                positions=list(connection.execute('''
+                    SELECT l.leg_id,l.instance_id,l.strategy_id,l.strategy_version,l.frame,
+                           l.symbol,l.position_side,l.owned_qty_units,l.created_ts,
+                           t.entry_price_ticks,t.last_price_ticks,t.updated_ts,
+                           (SELECT MIN(f.ts) FROM r4_fills f WHERE f.leg_id=l.leg_id),
+                           l.status
+                    FROM r4_active_legs l LEFT JOIN r4_leg_trailing t ON t.leg_id=l.leg_id
+                    WHERE l.owned_qty_units>0
+                    ORDER BY COALESCE((SELECT MIN(f.ts) FROM r4_fills f WHERE f.leg_id=l.leg_id),l.created_ts),l.leg_id
+                    LIMIT 257
+                '''))
+                rows=[]
+                for leg,iid,strategy,version,frame,symbol,side,units,created,entry,last,price_ts,filled,status in positions[:256]:
+                    if not all(isinstance(x,str) and re.fullmatch('[A-Za-z0-9_.:-]{1,160}',x) for x in (leg,iid,strategy,version,frame,symbol,status)) or side not in {'LONG','SHORT'}:
+                        raise ValueError('POSITION_ID_INVALID')
+                    entry_time=int(filled) if filled is not None else None
+                    price_time=int(price_ts or 0)
+                    fresh=0<=stamp-price_time<=180
+                    price_return=None
+                    if fresh and entry is not None and last is not None and int(entry)>0 and int(last)>0:
+                        price_return=round((int(last)-int(entry))/int(entry)*(1 if side=='LONG' else -1)*100,6)
+                    rows.append({'leg':leg,'instance':iid,'strategy':strategy,'version':version,
+                                 'frame':frame,'symbol':symbol,'side':side,'status':status,
+                                 'owned_qty_units':int(units),'ledger_created_epoch':int(created),
+                                 'first_fill_epoch':entry_time,
+                                 'holding_seconds':max(0,int(stamp)-entry_time) if entry_time is not None and 0<entry_time<=stamp else None,
+                                 'entry_price_ticks':entry,'last_price_ticks':last,'price_observed_epoch':price_time,
+                                 'price_fresh':fresh,'unlevered_price_return_pct':price_return,
+                                 'fees_funding_included':False,'entry_signal_verified':False})
+                diag['positions'].update(state='LEDGER_SNAPSHOT',rows=rows,truncated=len(positions)>256)
             diag['ledger']['state']='READ_ONLY_OK'
             if not tables:diag['ledger']['state']='NO_R4_TABLES'
             if diag['modules']['storage']['state']=='NO_DIRECT_EVIDENCE':observed('storage','DATABASE_READABLE')
         except (sqlite3.DatabaseError,OSError,TypeError,ValueError):
             diag['ledger']['state']='UNAVAILABLE'
             diag['ledger']['recent']={}
+            diag['positions'].update(state='UNAVAILABLE',rows=[])
             diag['ledger'].pop('proofs',None)
             observed('storage','DATABASE_READ_FAILED')
         finally:
@@ -1283,3 +1319,4 @@ if __name__=='__main__':
             path.parent.mkdir(parents=True,exist_ok=True);temporary=path.with_name(path.name+'.error.tmp');temporary.write_text(json.dumps(result),encoding='utf-8');os.replace(temporary,path)
         print(json.dumps(result,ensure_ascii=True));sys.exit(1)
     print(json.dumps(result,ensure_ascii=True))
+
