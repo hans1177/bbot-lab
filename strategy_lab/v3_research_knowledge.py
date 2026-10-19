@@ -258,13 +258,59 @@ def save_cloud_checkpoint():
 
 def publish_cloud_checkpoint(include_candidates=False):
     import sys
-    import base64,json,os,urllib.request,urllib.error
+    import base64,hashlib,json,os,urllib.request,urllib.error
     from pathlib import Path
     api='https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']
     def request(path,data=None,method=None):
         body=None if data is None else json.dumps(data).encode()
         req=urllib.request.Request(api+path,data=body,method=method,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'})
         with urllib.request.urlopen(req,timeout=90) as response:return json.load(response)
+    def checkpoint_git_objects(out):
+        """Transport unchanged checkpoint bytes in bounded Git blobs.
+
+        A separate transport manifest binds exact ordered chunks to the V1
+        archive SHA256; no research result or state path is removed/rewritten.
+        """
+        archive=out/'checkpoint.zip'
+        receipt_path=out/'CHECKPOINT.json'
+        if not archive.is_file() or not receipt_path.is_file():
+            raise RuntimeError('CHECKPOINT_TRANSPORT_SOURCE_MISSING')
+        receipt_raw=receipt_path.read_bytes()
+        receipt=json.loads(receipt_raw)
+        if receipt.get('schema')!='B_BOT_RESEARCH_CHECKPOINT_V1':
+            raise RuntimeError('CHECKPOINT_TRANSPORT_RECEIPT_INVALID')
+        chunk_bytes=8*1024**2
+        sha=hashlib.sha256()
+        parts=[]
+        total=0
+        with archive.open('rb') as source:
+            while True:
+                raw=source.read(chunk_bytes)
+                if not raw:break
+                if len(parts)>=64:raise RuntimeError('CHECKPOINT_TRANSPORT_ARCHIVE_LIMIT')
+                index=len(parts)
+                name=f'checkpoint.part{index:04d}'
+                parts.append({'name':name,'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()})
+                total+=len(raw)
+                sha.update(raw)
+        if not parts or sha.hexdigest()!=receipt.get('archive_sha256'):
+            raise RuntimeError('CHECKPOINT_TRANSPORT_ARCHIVE_HASH')
+        manifest={
+            'schema':'B_BOT_RESEARCH_CHECKPOINT_PARTS_V1',
+            'archive_sha256':sha.hexdigest(),
+            'archive_bytes':total,
+            'chunk_bytes':chunk_bytes,
+            'parts':parts,
+        }
+        yield 'CHECKPOINT.json',receipt_raw
+        yield 'checkpoint.parts.json',json.dumps(manifest,sort_keys=True,separators=(',',':')).encode()
+        with archive.open('rb') as source:
+            for row in parts:
+                raw=source.read(chunk_bytes)
+                if len(raw)!=row['bytes'] or hashlib.sha256(raw).hexdigest()!=row['sha256']:
+                    raise RuntimeError('CHECKPOINT_TRANSPORT_SOURCE_CHANGED')
+                yield row['name'],raw
+            if source.read(1):raise RuntimeError('CHECKPOINT_TRANSPORT_SOURCE_CHANGED')
     for branch,folder in [('research-state','research-checkpoint-out')]+([('runtime-candidates','runtime-candidates-out')] if include_candidates else []):
         out=Path(os.environ['RUNNER_TEMP'])/folder
         if not out.exists():continue
@@ -279,11 +325,17 @@ def publish_cloud_checkpoint(include_candidates=False):
             expected=json.loads(lease.read_text())['head']
             if parent!=expected:raise RuntimeError('CHECKPOINT_REMOTE_STATE_CHANGED')
         elements=[]
-        for path in sorted(out.rglob('*')):
-            if not path.is_file():continue
-            name=path.relative_to(out).as_posix();raw=path.read_bytes()
+        if branch=='research-state':
+            upload=checkpoint_git_objects(out)
+        else:
+            upload=((path.relative_to(out).as_posix(),path.read_bytes()) for path in sorted(out.rglob('*')) if path.is_file())
+        for name,raw in upload:
             if len(raw)>90*1024**2:raise RuntimeError('CHECKPOINT_GIT_BLOB_LIMIT')
-            blob=request('/git/blobs',{'content':base64.b64encode(raw).decode(),'encoding':'base64'})
+            try:
+                blob=request('/git/blobs',{'content':base64.b64encode(raw).decode(),'encoding':'base64'})
+            except urllib.error.HTTPError as error:
+                # Never log raw response bodies, token headers, or checkpoint data.
+                raise RuntimeError('CHECKPOINT_GIT_BLOB_REJECTED:'+str(error.code)+':'+name+':bytes='+str(len(raw))) from error
             elements.append({'path':name,'mode':'100644','type':'blob','sha':blob['sha']})
         tree=request('/git/trees',{'tree':elements})
         commit=request('/git/commits',{'message':branch+' run '+os.environ['GITHUB_RUN_ID']+' attempt '+os.environ['GITHUB_RUN_ATTEMPT'],'tree':tree['sha'],'parents':[parent] if parent else []})
