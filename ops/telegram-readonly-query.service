@@ -1,0 +1,20 @@
+[Unit]
+Description=B-Bot read-only private Telegram question handler using reservation.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/home/ec2-user/bot
+ExecStart=/home/ec2-user/bot/venv/bin/python -B /home/ec2-user/bot/telegram_readonly_query.py --poll-once --use-reservation
+TimeoutStartSec=45
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# reservation.py opens runner.log and the query poller uses its own isolated state cursor.
+ReadWritePaths=/home/ec2-user/bot/state /home/ec2-user/bot/logs
+
+[Install]
+WantedBy=multi-user.target

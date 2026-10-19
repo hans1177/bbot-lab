@@ -53,3 +53,14 @@
 - 새 runtime/telegram_critical_watch.py는 reservation.py가 **존재하면 그와 같은 봇/개인 수신 대상**을 우선하여 사용하고, 없으면 기존 환경설정 전송 경로만 사용한다. 기존 배포된 Watch 코드를 변경하거나 테스트를 재전송하려면 **서버 실제 파일 해시 일치, 검증된 배포 커밋, 개인 수신 확인**이 선행되어야 한다.
 - 기존 reservation.py, server_status_telegram.py, 기존 cron 및 모든 R4 거래 모듈을 **절대 자동 변경하지 않는다**. 현재 AWS에 테스트된 초기 Watch 버전만 저장돼 있으며 타이머는 아직 활성화되지 않았다.
 - 배포 전 사전 점검: reservation.py 실제 존재 여부와 SHA256, import 성공 여부, getUpdates webhook 또는 기존 소비자 존재 여부를 비밀정보 출력 없이 확인. 기존 5분 발신 메시지와 새 테스트가 동일 채팅에서 실제로 도착하는지 반드시 확인. 그 전엔 5분/30분 보고를 중단하지 않는다.
+
+
+## 대화형 질문 폴러: opt-in, 5분 알림 별도 유지
+
+- ops/telegram-readonly-query.service 와 ops/telegram-readonly-query.timer 는 자동 배포되지 않으며 기본 비활성이다. 타이머는 서비스 완료 후 15초가 지나 다음 폴링을 시작하고 getUpdates는 최대 20초 롱폴링한다. 정상적인 답변에는 수십 초 걸릴 수 있다.
+- 서비스는 runtime/telegram_readonly_query.py --poll-once --use-reservation 만 실행하며, 실제 AWS에 설치된 reservation.py 에서 봇 토큰 및 private chat을 확인한다. Telegram 질문은 private 채팅 및 허용 chat ID == 실제 user ID인 메시지만 답변한다. 사용자 ID와 토큰은 절대 출력하지 않는다.
+- 예약 모듈을 import해 가져오는 잔고·포지션·전략·승률은 기존 보고 모듈의 조회 로직을 따르며, 새로운 거래 명령은 추가하지 않는다. 원장 조회는 SQLite 읽기 전용으로만 수행한다. reservation.py 원본, R4 트레이더, watchdog, 기존 5분 보고와 30분 cron은 유지한다.
+- 활성화 선행 조건: AWS 설치 스크립트 해시 검증, R4 active, runner.service inactive, telegram-critical-watch.timer active, 현재 5분 알림 정상, Telegram getWebhookInfo의 webhook URL 비어있음, 기존 메시지 소비 프로그램이 없다는 운영자 확인. 같은 봇에서 webhook 또는 다른 getUpdates 폴러가 있으면 활성화 금지. Telegram API로 외부/숨겨진 getUpdates 소비자를 완벽히 감지할 수 없다.
+- 첫 폴링은 현재까지 쌓인 오래된 메시지를 회신하지 않도록 cursor 파일을 새로 생성한다. 이는 Telegram 서버의 대기열을 정리할 수 있으므로 다른 기존 소비자가 없다는 확인 없이는 절대 첫 폴링을 실행하지 않는다.
+- service ProtectSystem=strict, 허용 쓰기 디렉터리는 독립 상태 cursor 및 예약 logger가 사용하는 state/logs뿐이다. service는 oneshot이며 자동 트레이더나 예약 5분 sender를 시작/중단하지 않는다.
+- 활성화 후 사용자 명시적 테스트로 개인 채팅에서 현금, 포지션, 오늘 승률, 전략별 성과, 서버 상태 질문하고 답변이 실제 도착하는지 확인한다. 실패 시 우선 새 query timer만 비활성화하고, 원인을 조사한다. 기존 알림과 R4를 멈추지 않는다.
