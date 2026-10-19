@@ -197,10 +197,14 @@ def evaluate_once(base, problems, send, now=None):
 def _env_file(path):
     if path.is_symlink() or not path.is_file():
         return {}
-    if path.stat().st_size > 65536:
-        raise RuntimeError("WATCH_ENV_TOO_LARGE")
+    try:
+        if path.stat().st_size > 65536:
+            raise RuntimeError("WATCH_ENV_TOO_LARGE")
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except PermissionError:
+        return {}
     result = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in lines:
         if "=" not in line or line.lstrip().startswith("#"):
             continue
         key, value = line.split("=", 1)
@@ -221,7 +225,7 @@ def _telegram_credentials(base):
     chat = next((settings[k] for k in ("TELEGRAM_CHAT_ID","CHAT_ID")
                  if settings.get(k)), "")
     # Not logged or uploaded.
-    if not token or not chat or not (chat.lstrip("-").isdecimal()):
+    if not token or not chat or not chat.isdecimal():
         raise RuntimeError("WATCH_TELEGRAM_CONFIG_MISSING")
     return token, chat
 
