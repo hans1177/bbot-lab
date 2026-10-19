@@ -87,6 +87,84 @@ class R4UserStreamTests(unittest.TestCase):
         self.assertEqual(received, [msg])
         self.assertEqual(logs, [])
 
+    def test_socket_close_and_error_are_observed_without_restarting(self):
+        logs = []
+        stream = isolated_stream(logs)(runtime=None, exchange=None)
+        stream._on_close()
+        stream._on_error()
+        self.assertEqual(len(logs), 2)
+        self.assertIn("WS_DISCONNECTED", logs[0][0][1])
+        self.assertIn("WS_ERROR", logs[1][0][1])
+        stream.stop_event.set()
+        stream._on_close()
+        stream._on_error()
+        self.assertEqual(len(logs), 2)
+
+    def test_start_adds_optional_callbacks_only_if_existing_sdk_supports(self):
+        import sys
+        import types
+        from unittest.mock import patch
+
+        for old_sdk in (False, True):
+            logs, calls = [], []
+            instances = []
+            class FakeSocket:
+                def __init__(self, callbacks):
+                    self.callbacks = callbacks
+                    self.stopped = False
+                    instances.append(self)
+                def user_data(self, **kwargs):
+                    calls.append(("subscribe", kwargs))
+                def stop(self):
+                    self.stopped = True
+            if old_sdk:
+                class FakeSdk(FakeSocket):
+                    def __init__(self, on_message=None):
+                        super().__init__({"on_message": on_message})
+            else:
+                class FakeSdk(FakeSocket):
+                    def __init__(self, on_message=None, on_close=None, on_error=None):
+                        super().__init__({"on_message": on_message,
+                                          "on_close": on_close, "on_error": on_error})
+            class FakeThread:
+                def __init__(self, **kwargs):
+                    self.kwargs = kwargs
+                    self.started = False
+                def start(self):
+                    self.started = True
+            def safe_call(fn, **kwargs):
+                calls.append(("listen_key", None))
+                return {"listenKey": "FIXTURE"}
+            order = SimpleNamespace(
+                client=SimpleNamespace(new_listen_key=lambda: None),
+                safe_call=safe_call,
+            )
+            stream = isolated_stream(logs)(
+                runtime=None,
+                exchange=SimpleNamespace(order=order),
+            )
+            full = "binance.websocket.um_futures.websocket_client"
+            names = ["binance", "binance.websocket", "binance.websocket.um_futures", full]
+            modules = {name: types.ModuleType(name) for name in names}
+            for name in names[:-1]:
+                modules[name].__path__ = []
+            modules[full].UMFuturesWebsocketClient = FakeSdk
+            with patch.dict(sys.modules, modules), patch.object(threading, "Thread", FakeThread):
+                stream.start()
+                self.assertEqual(calls[0][0], "listen_key")
+                self.assertEqual(calls[1][0], "subscribe")
+                self.assertEqual(calls[1][1]["listen_key"], "FIXTURE")
+                self.assertTrue(stream.keeper.started)
+                self.assertTrue(callable(instances[0].callbacks["on_message"]))
+                if old_sdk:
+                    self.assertEqual(set(instances[0].callbacks), {"on_message"})
+                else:
+                    self.assertTrue(callable(instances[0].callbacks["on_close"]))
+                    self.assertTrue(callable(instances[0].callbacks["on_error"]))
+                stream.close()
+            self.assertTrue(instances[0].stopped)
+            self.assertFalse(logs)
+
     def test_invalid_message_does_not_crash_user_data_callback(self):
         logs = []
         stream = isolated_stream(logs)(runtime=SimpleNamespace(), exchange=None)
