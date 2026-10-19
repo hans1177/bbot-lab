@@ -130,7 +130,7 @@ class ExactTrailingSourceIntegrityTests(unittest.TestCase):
 
     def frozen_measurement(self):
         """One archived stage3 result with a real JSON report and exact tuple."""
-        path=self.root/"strategy_lab/results/v3/trailing_report.json"
+        path=self.root/"strategy_lab/results/20261019_141854_V3_EFFICIENCY_PULLBACK_RESUME_30M_BROAD_V1.json"
         path.parent.mkdir(parents=True,exist_ok=True)
         data={"strategy_file":str(self.source),
               "individual_trailing_research":{"start_pct":3.0,"callback_pct":1.0},
@@ -159,6 +159,33 @@ class ExactTrailingSourceIntegrityTests(unittest.TestCase):
         self.frozen_measurement()
         self.assertIsNone(self.ns["_trailing_frozen_results_error"](self.target,self.item))
         self.assertEqual(self.target["pipeline_stage"],"INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING")
+
+    def test_real_run_strategy_output_root_matches_stage3_path(self):
+        path,_=self.frozen_measurement()
+        relative=path.relative_to(self.root).as_posix()
+        self.assertTrue(relative.startswith("strategy_lab/results/"))
+        self.assertEqual(len(Path(relative).parts),3)
+        self.assertIsNone(self.ns["_trailing_frozen_results_error"](self.target,self.item))
+        run_source=(REPO/"strategy_lab/run_strategy.py").read_text(encoding="utf-8-sig")
+        self.assertIn('jf = (',run_source)
+        self.assertIn('/ f"{stamp}_{name}.json"',run_source)
+
+    def test_stage3_state_directory_is_not_a_trial_report(self):
+        self.frozen_measurement()
+        self.item["fine_results"]["3.0000|1.0000"]["result_json"]=(
+            "strategy_lab/results/v3/trailing_report.json"
+        )
+        self.expect_frozen_rejection("TRAILING_FROZEN_RESULT_PATH_INVALID")
+
+    def test_nested_or_parent_path_in_report_is_rejected(self):
+        for name in ("strategy_lab/results/other/record.json",
+                     "strategy_lab/results/../record.json",
+                     "/tmp/record.json"):
+            with self.subTest(name=name):
+                self.setUp()
+                self.frozen_measurement()
+                self.item["fine_results"]["3.0000|1.0000"]["result_json"]=name
+                self.expect_frozen_rejection("TRAILING_FROZEN_RESULT_PATH_INVALID")
 
     def test_frozen_missing_report_quarantined_before_selection(self):
         path,_=self.frozen_measurement()
