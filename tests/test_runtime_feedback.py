@@ -111,6 +111,73 @@ class RuntimeFeedbackTests(unittest.TestCase):
         self.assertEqual(diag['errors']['tags']['ORDER_FAIL'],1)
         self.assertNotIn('DoNotExport',json.dumps(diag))
         self.assertNotIn('private',json.dumps(diag))
+    def test_bounded_ws_signal_and_telegram_diagnostics_do_not_export_log_contents(self):
+        now=time.strftime('%Y-%m-%d %H:%M:%S',time.localtime())
+        iid='SI_test_fixture'
+        config=json.loads(self.config.read_text())
+        config['r4_runtime']={'strategy_instances':{iid:{
+            'strategy_id':'V3_TEST','timeframe':'1H','tier':'CANARY',
+            'enabled':True,'entry_enabled':True}}}
+        self.config.write_text(json.dumps(config))
+        (self.root/'server_status_telegram.py').write_text('# safe test stub\n')
+        (self.root/'monitor.py').write_text('# safe test stub\n')
+        log=self.root/'logs/runner.log';log.parent.mkdir(exist_ok=True)
+        log.write_text('\n'.join((
+            f'{now} [INFO] [주문][R4][WS_CONNECTED] token=SECRET_SHOULD_NOT_LEAK',
+            f'{now} [INFO] [주문][R4][ENTRY_RESULT] instance={iid} symbol=BTCUSDT status=PROCESSED extra=SECRET_SHOULD_NOT_LEAK',
+            f'{now} [INFO] [주문][R4][ENTRY_BLOCK] instance={iid} reason=ACCOUNT_MODE_GUARD',
+            f'{now} [INFO] [주문][SERVER_STATUS_TELEGRAM] sent ok chars=150 elapsed=1.3s token=SECRET_SHOULD_NOT_LEAK',
+            f'{now} [ERROR] [주문][SERVER_STATUS_TELEGRAM] fail err=https://api.telegram.org/botTOKEN_PRIVATE/sendMessage',
+            ''
+        )))
+        self.call()
+        diag=self.payload('DIAGNOSTICS.json')
+        ws=diag['modules']['websocket']
+        self.assertEqual(ws['state'],'LOG_EVENTS_OBSERVED')
+        self.assertEqual(ws['log_event_counts']['WS_CONNECTED'],1)
+        self.assertFalse(ws['direct_connection_heartbeat'])
+        signal=diag['modules']['signal']
+        self.assertEqual(signal['state'],'PARTIAL_LOG_EVIDENCE')
+        self.assertEqual(signal['log_event_counts']['ENTRY_RESULT'],1)
+        self.assertFalse(signal['direct_evaluation_heartbeat'])
+        instance=diag['ledger']['instances'][0]
+        self.assertEqual(instance['diagnostic_entry_results'],1)
+        self.assertEqual(instance['diagnostic_entry_blocks'],1)
+        self.assertFalse(instance['evaluation_heartbeat_observed'])
+        tg=diag['modules']['telegram']
+        self.assertEqual(tg['state'],'SEND_FAILURE_LOGGED')
+        self.assertEqual(tg['send_ok_count'],1)
+        self.assertEqual(tg['send_failure_count'],1)
+        self.assertFalse(tg['message_delivery_verified'])
+        self.assertIn('server_status_telegram.py',tg['source_files'])
+        self.assertNotIn('SECRET_SHOULD_NOT_LEAK',json.dumps(diag))
+        self.assertNotIn('TOKEN_PRIVATE',json.dumps(diag))
+        self.assertNotIn('https://',json.dumps(diag))
+    def test_no_log_does_not_invent_live_ws_telegram_or_signal_health(self):
+        self.call()
+        diag=self.payload('DIAGNOSTICS.json')
+        self.assertEqual(diag['modules']['websocket']['state'],'NO_DIRECT_HEARTBEAT')
+        self.assertEqual(diag['modules']['signal']['state'],'NO_DIRECT_EVIDENCE')
+        self.assertEqual(diag['modules']['telegram']['state'],'SOURCE_NOT_FOUND')
+        self.assertEqual(diag['modules']['telegram']['send_ok_count'],0)
+    def test_ws_failure_only_is_not_reported_as_connected(self):
+        log=self.root/'logs/runner.log';log.parent.mkdir(exist_ok=True)
+        log.write_text('[ERROR] [주문][R4][WS_KEEPALIVE_FAIL] token=SECRET_SHOULD_NOT_LEAK\n')
+        self.call()
+        diag=self.payload('DIAGNOSTICS.json')
+        ws=diag['modules']['websocket']
+        self.assertEqual(ws['state'],'FAILURE_EVENTS_OBSERVED')
+        self.assertFalse(ws['direct_connection_heartbeat'])
+        self.assertEqual(ws['last_log_event_epoch'],0)
+        self.assertNotIn('SECRET_SHOULD_NOT_LEAK',json.dumps(diag))
+    def test_telegram_log_success_is_observation_not_delivery_confirmation(self):
+        log=self.root/'logs/runner.log';log.parent.mkdir(exist_ok=True)
+        log.write_text('[INFO] [주문][SERVER_STATUS_TELEGRAM] sent ok chars=100 elapsed=0.2s\n')
+        self.call()
+        diag=self.payload('DIAGNOSTICS.json')
+        self.assertEqual(diag['modules']['telegram']['state'],'SEND_OK_LOGGED')
+        self.assertFalse(diag['modules']['telegram']['message_delivery_verified'])
+        self.assertEqual(diag['modules']['telegram']['last_send_ok_epoch'],0)
 class FeedbackKeyTests(unittest.TestCase):
     def test_only_explicit_feedback_setup_registers_public_write_key(self):
         import base64

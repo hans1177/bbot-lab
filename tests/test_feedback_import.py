@@ -71,6 +71,17 @@ class FeedbackImportTests(unittest.TestCase):
         imported=json.loads((self.results/'runtime_diagnostics.json').read_text())
         self.assertEqual(imported['ledger']['state'],'MISSING')
         self.assertFalse((self.root/'state/history.db').exists())
+    def test_telegram_stage_imports_as_bounded_observation(self):
+        self.diagnostics={'schema':'B_BOT_RUNTIME_DIAGNOSTICS_V1','created_at_epoch':self.stamp,'host':{},
+                          'modules':{'websocket':{'state':'NO_DIRECT_HEARTBEAT'},'signal':{'state':'PARTIAL_LOG_EVIDENCE'},
+                                     'telegram':{'state':'SEND_OK_LOGGED','send_ok_count':1,'message_delivery_verified':False}},
+                          'ledger':{'state':'MISSING','recent':{}},'errors':{'tags':{}}}
+        result=self.call()
+        self.assertEqual(result['status'],'SERVER_FEEDBACK_IMPORTED')
+        imported=json.loads((self.results/'runtime_diagnostics.json').read_text())
+        self.assertEqual(imported['modules']['telegram']['send_ok_count'],1)
+        self.assertFalse(imported['modules']['telegram']['message_delivery_verified'])
+
     def test_unexpected_diagnostic_stage_fails_before_writing(self):
         self.diagnostics={'schema':'B_BOT_RUNTIME_DIAGNOSTICS_V1','created_at_epoch':self.stamp,'host':{},
                           'modules':{'unknown_stage':{'state':'SERVICE_ACTIVE'}},
