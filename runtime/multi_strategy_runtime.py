@@ -84,6 +84,7 @@ class MultiStrategyRuntime:
                     "FRAME_STRATEGY_SLOTS_FULL",
                     "FRAME_STRATEGY_VERSION_OCCUPIED",
                     "OPPOSITE_SIDE_MULTI_LEG_DISABLED",
+                    "TIER_LEG_LIMIT_REACHED",
                 }
                 if reason not in blocking_reasons and not reason.startswith(
                     "TIER_CONCURRENT_LEG_LIMIT:"
