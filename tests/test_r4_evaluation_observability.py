@@ -25,13 +25,13 @@ class ObserverTests(unittest.TestCase):
 
     def test_latest_signal_and_exit_observations_are_bounded_and_no_trade_fields(self):
         self.assertFalse(self.observer.flush())
-        self.assertTrue(self.observer.note("ENTRY", "SI_test", "12H", "AXSUSDT", "NO_SIGNAL"))
+        self.assertTrue(self.observer.note("ENTRY", "SI_test", "12H", "AXSUSDT", "ENTRY_GATE_NO_ALLOW"))
         self.assertTrue(self.observer.note("EXIT", "SI_test", "12H", "AXSUSDT",
                                           "NO_OPPOSITE", "LEG_test", "SHORT"))
         self.assertTrue(self.observer.flush())
         payload = json.loads(self.path.read_text())
         self.assertEqual(payload["schema"], SCHEMA)
-        self.assertEqual(payload["entry_evaluations"][0]["status"], "NO_SIGNAL")
+        self.assertEqual(payload["entry_evaluations"][0]["status"], "ENTRY_GATE_NO_ALLOW")
         self.assertEqual(payload["exit_evaluations"][0]["side"], "SHORT")
         self.assertNotIn("signal_id", self.path.read_text())
         self.assertNotIn("price", self.path.read_text())
@@ -54,7 +54,7 @@ class ObserverTests(unittest.TestCase):
         target = Path(self.temp.name) / "do_not_change"
         target.write_text("SAFE")
         self.path.symlink_to(target)
-        self.observer.note("ENTRY", "SI_test", "1H", "BTCUSDT", "NO_SIGNAL")
+        self.observer.note("ENTRY", "SI_test", "1H", "BTCUSDT", "ENTRY_GATE_NO_ALLOW")
         with self.assertRaisesRegex(RuntimeError, "SYMLINK"):
             self.observer.flush()
         self.assertEqual(target.read_text(), "SAFE")
