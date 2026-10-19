@@ -3140,7 +3140,7 @@ class R4RuntimeService:
                         self._eval_note("ENTRY", instance_id, frame, symbol, "SIGNAL_EVALUATION_ERROR")
                         raise
                     self._eval_note("ENTRY", instance_id, frame, symbol,
-                                    "SIGNAL_PRESENT" if int(result.get("allow") or 0) == 1 else "NO_SIGNAL")
+                                    "ENTRY_GATE_ALLOW" if int(result.get("allow") or 0) == 1 else "ENTRY_GATE_NO_ALLOW")
                     result_cache[cache_key] = result
                 if int(result.get("allow") or 0) != 1:
                     continue
