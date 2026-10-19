@@ -26,6 +26,65 @@ class CloudCheckpointTests(unittest.TestCase):
     def save(self):
         self.run_step('Preserve research checkpoint')
         shutil.copytree(self.base/'research-checkpoint-out',self.base/'research-checkpoint-in')
+    def test_p0_stage_snapshot_binds_same_archived_exact_version_evidence(self):
+        pipeline_path=self.state/'historical_314_pipeline_stage2.json'
+        pipeline={
+            'entries':[{
+                'strategy_id':'V3_EFFICIENCY_PULLBACK_RESUME',
+                'exact_strategy_version':'EV_55a86e97dfadf81c_30M',
+                'timeframe':'30M','eligible':True,
+                'pipeline_stage':'FULL_VALIDATION_REDEVELOPMENT_PENDING',
+                'final_risk_gate':{'pass':True,'decision':'PASS'},
+                'full_validation_gate':{
+                    'pass':False,'decision':'FAIL',
+                    'absolute_fail_reasons':['FULL_VALIDATION_COST_STRESS_2X_NONPOSITIVE'],
+                },
+                'last_error':'',
+                'redevelopment_cycles_by_gate':{'FULL_VALIDATION':1},
+            }],
+        }
+        pipeline_path.write_text(json.dumps(pipeline))
+        self.save()
+        out=self.base/'research-checkpoint-out'
+        receipt=json.loads((out/'CHECKPOINT.json').read_text())
+        snap=receipt['p0_stage_status']
+        path='strategy_lab/results/v3/historical_314_pipeline_stage2.json'
+        self.assertEqual(snap['pipeline_sha256'],receipt['files'][path]['sha256'])
+        self.assertEqual(snap['stage_counts'],{'FULL_VALIDATION_REDEVELOPMENT_PENDING':1})
+        self.assertEqual(snap['leading']['pipeline_stage'],'FULL_VALIDATION_REDEVELOPMENT_PENDING')
+        self.assertTrue(snap['leading']['final_risk_gate']['pass'])
+        self.assertFalse(snap['leading']['full_validation_gate']['pass'])
+        self.assertEqual(snap['leading']['full_validation_gate']['reasons'],
+                         ['FULL_VALIDATION_COST_STRESS_2X_NONPOSITIVE'])
+        self.assertEqual(snap['research_full_and_sealed_blind_pass_count'],0)
+        self.assertFalse(snap['automatic_registration_authorized'])
+        self.assertEqual(snap['aws_final_certification'],'NOT_VERIFIED_BY_GITHUB_RESEARCH')
+        with zipfile.ZipFile(out/'checkpoint.zip') as archive:
+            self.assertEqual(archive.read(path),pipeline_path.read_bytes())
+
+    def test_p0_snapshot_rejects_false_shadow_pass_and_missing_evidence(self):
+        self.run_step('Preserve research checkpoint')
+        receipt=json.loads((self.base/'research-checkpoint-out/CHECKPOINT.json').read_text())
+        self.assertEqual(receipt['p0_stage_status']['status'],'NO_PIPELINE_EVIDENCE')
+        pipeline={
+            'entries':[{
+                'strategy_id':'V3_EFFICIENCY_PULLBACK_RESUME',
+                'exact_strategy_version':'EV_55a86e97dfadf81c_30M',
+                'timeframe':'30M','eligible':True,
+                'pipeline_stage':'LOCAL_SHADOW_PENDING',
+                'full_validation_gate':{'pass':True,'decision':'PASS'},
+                'sealed_final_blind_gate':{
+                    'pass':True,'decision':'PASS','next_stage':'NOT_LOCAL_SHADOW',
+                },
+            }],
+        }
+        (self.state/'historical_314_pipeline_stage2.json').write_text(json.dumps(pipeline))
+        self.run_step('Preserve research checkpoint')
+        snap=json.loads((self.base/'research-checkpoint-out/CHECKPOINT.json').read_text())['p0_stage_status']
+        self.assertEqual(snap['research_full_and_sealed_blind_pass_count'],0)
+        self.assertFalse(snap['automatic_registration_authorized'])
+        self.assertEqual(snap['aws_final_certification'],'NOT_VERIFIED_BY_GITHUB_RESEARCH')
+
     def test_state_roundtrip_and_code_preserved(self):
         before={p.relative_to(self.state):p.read_bytes() for p in self.state.rglob('*') if p.is_file()}
         self.save();(self.state/'trial_ledger.json').write_text('{}')
