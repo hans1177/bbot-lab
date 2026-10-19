@@ -1036,10 +1036,58 @@ def _reentry_key(candidate):
     raise RuntimeError("REENTRY_CANDIDATE_MODE_INVALID")
 
 
+def _block_reentry_integrity(state,target,stage4,item,reason):
+    """Fail only the exact reentry candidate; preserve prior measured evidence."""
+    target["pipeline_stage"]="REENTRY_RESEARCH_INCOMPLETE"
+    target["last_error"]=reason
+    target["direct_canary_allowed"]=False
+    target["last_checked_at"]=now()
+    item["status"]="INCOMPLETE"
+    item["reentry_integrity_error"]=reason
+    item["last_checked_at"]=now()
+    _save_historical_stage2(state)
+    atomic(REENTRY_STAGE4,stage4)
+    knowledge.record_result(
+        f"pipeline_reentry_integrity:{target.get('strategy_id')}:{target.get('timeframe')}:{target.get('exact_strategy_version')}",
+        {"strategy_id":target.get("strategy_id"),
+         "exact_strategy_version":target.get("exact_strategy_version"),
+         "pipeline_stage":target["pipeline_stage"],
+         "reason":reason,"automatic_promotion":False,
+         "canary_eligible":False},failed=True,
+    )
+    return {"status":"FAIL","reason":reason,
+            "strategy_id":target.get("strategy_id"),
+            "exact_strategy_version":target.get("exact_strategy_version"),
+            "pipeline_stage":target["pipeline_stage"],
+            "automatic_promotion":False}
+
+
+def _reentry_result_binding_error(report,target,source,start,callback,mode,confirm):
+    """Bind the executed reentry method, trailing parameters and exact source."""
+    problem=_trailing_result_binding_error(
+        report,target,{"start_pct":start,"callback_pct":callback},source,
+    )
+    if problem:return "REENTRY_"+problem
+    metadata=report.get("individual_reentry_research")
+    if not isinstance(metadata,dict):
+        return "REENTRY_RESULT_CONFIG_MISSING"
+    if str(metadata.get("mode") or "").upper()!=mode:
+        return "REENTRY_RESULT_CONFIG_MISMATCH"
+    if mode=="CURRENT_STATE_CONFIRM_STRATEGY_BARS":
+        try: bars=int(metadata.get("confirmation_bars"))
+        except (ValueError,TypeError,OverflowError):
+            return "REENTRY_RESULT_CONFIRMATION_INVALID"
+        if bars!=confirm:return "REENTRY_RESULT_CONFIRMATION_MISMATCH"
+    if (report.get("research_window") or {}).get("mode")!="HARD_PASS_ONLY":
+        return "REENTRY_RESULT_WINDOW_INVALID"
+    return None
+
+
 def _run_reentry_candidate(state,target,stage4,item,candidate):
+    source_error=_trailing_source_integrity_error(target)
+    if source_error:
+        return _block_reentry_integrity(state,target,stage4,item,source_error)
     source=ROOT/str(target.get("canonical_source_file") or "")
-    if not source.is_file():
-        return {"status":"FAIL","reason":"CANONICAL_SOURCE_FILE_MISSING","source":str(source)}
     tf=str(target.get("timeframe") or "").upper()
     strategy_id=str(target.get("strategy_id") or "").upper()
     exact_version=str(target.get("exact_strategy_version") or "")
@@ -1066,11 +1114,22 @@ def _run_reentry_candidate(state,target,stage4,item,candidate):
     if mode=="CURRENT_STATE_CONFIRM_STRATEGY_BARS":
         env["BBOT_RESEARCH_REENTRY_CONFIRM_BARS"]=str(confirm)
     started=time.time()
-    p=subprocess.run(
-        [sys.executable,str(RUNNER),str(source)],
-        cwd=str(ROOT),env=env,text=True,encoding="utf-8",errors="replace",
-        stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
-    )
+    try:
+        p=subprocess.run(
+            [sys.executable,str(RUNNER),str(source)],
+            cwd=str(ROOT),env=env,text=True,encoding="utf-8",errors="replace",
+            stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=1800,
+        )
+    except subprocess.TimeoutExpired:
+        key=_reentry_key(candidate)
+        item.setdefault("results",{})[key]={
+            "status":"RUNTIME_FAIL","reason":"REENTRY_RUN_TIMEOUT",
+            "mode":mode,"confirm_bars":confirm if confirm else None,
+            "runtime_equivalent":False,"automatic_deployment_allowed":False,
+            "trial":trial,
+        }
+        knowledge.complete_trial(trial,"REENTRY_RUN_TIMEOUT","FAIL","UNKNOWN")
+        return _block_reentry_integrity(state,target,stage4,item,"REENTRY_RUN_TIMEOUT")
     key=_reentry_key(candidate); done=item.setdefault("results",{})
     base_row={
         "mode":mode,
@@ -1095,12 +1154,19 @@ def _run_reentry_candidate(state,target,stage4,item,candidate):
         knowledge.complete_trial(trial,"RESULT_NOT_FOUND","FAIL","UNKNOWN")
         return {"status":"FAIL","reason":"RESULT_NOT_FOUND","candidate":candidate,"trial":trial}
     report=load(result,{})
-    trailing_meta=report.get("individual_trailing_research") or {}
-    reentry_meta=report.get("individual_reentry_research") or {}
-    if abs(float(trailing_meta.get("start_pct"))-float(start))>1e-12 or abs(float(trailing_meta.get("callback_pct"))-float(callback))>1e-12:
-        raise RuntimeError("REENTRY_TRAILING_CONFIG_MISMATCH")
-    if str(reentry_meta.get("mode") or "").upper()!=mode:
-        raise RuntimeError("REENTRY_RESULT_CONFIG_MISMATCH")
+    binding_error=_reentry_result_binding_error(
+        report,target,source,start,callback,mode,confirm,
+    )
+    if binding_error is None:
+        binding_error=_trailing_source_integrity_error(target)
+    if binding_error:
+        done[key]={
+            "status":"INVALID_RESULT_BINDING",**base_row,
+            "reason":binding_error,"trial":trial,
+            "result_json":str(result.relative_to(ROOT)).replace("\\","/"),
+        }
+        knowledge.complete_trial(trial,binding_error,"FAIL","UNKNOWN")
+        return _block_reentry_integrity(state,target,stage4,item,binding_error)
     evidence=_reentry_evidence(report,tf)
     done[key]={
         "status":"MEASURED",**base_row,"evidence":evidence,
