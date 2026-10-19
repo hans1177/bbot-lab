@@ -65,14 +65,31 @@ class R4UserStream:
                 sec=60,
             )
 
+    def _on_close(self, *_args):
+        if not self.stop_event.is_set():
+            _log_error("WS_DISCONNECTED", "[주문][R4][WS_DISCONNECTED]", sec=60)
+
+    def _on_error(self, *_args):
+        if not self.stop_event.is_set():
+            _log_error("WS_ERROR", "[주문][R4][WS_ERROR]", sec=60)
+
     def start(self):
+        import inspect
         from binance.websocket.um_futures.websocket_client import UMFuturesWebsocketClient
 
         row = self.exchange.order.safe_call(self.exchange.order.client.new_listen_key)
         self.listen_key = str((row or {}).get("listenKey") or "")
         if not self.listen_key:
             raise RuntimeError("USER_STREAM_LISTEN_KEY_FAILED")
-        self.ws = UMFuturesWebsocketClient(on_message=self._message)
+        # 설치된 기존 SDK에서 지원할 때만 상태 관찰 콜백 연결.
+        # callback은 오류 로그만 기록하며 별도 소켓/서비스를 시작하지 않는다.
+        params = inspect.signature(UMFuturesWebsocketClient).parameters
+        ws_options = {"on_message": self._message}
+        if "on_close" in params:
+            ws_options["on_close"] = self._on_close
+        if "on_error" in params:
+            ws_options["on_error"] = self._on_error
+        self.ws = UMFuturesWebsocketClient(**ws_options)
         self.ws.user_data(listen_key=self.listen_key, id=1)
         self.keeper = threading.Thread(
             target=self._keepalive,
