@@ -1260,6 +1260,114 @@ def publish_github_feedback(candidates, received_commit):
              send_ok_count=tg['sent_ok'],send_failure_count=tg['send_failed'],
              last_send_ok_epoch=last_seen['telegram_ok'],last_send_failure_epoch=last_seen['telegram_failed'],
              message_delivery_verified=False,log_window='TAIL_400_LINES')
+    # Runtime observations are produced by the sole R4 process. This publisher
+    # only reads an allowlisted, bounded snapshot; never reconstructs live signals
+    # from logs or treats an absent observation as a successful evaluation.
+    eval_path=state/'r4_execution_evaluations.json'
+    eval_diag={'state':'NO_DIRECT_EVIDENCE','last_snapshot_epoch':None,
+               'instances':[], 'position_evaluations':[]}
+    config_instances=(config.get('r4_runtime') or {}).get('strategy_instances') or {}
+    config_instances=config_instances if isinstance(config_instances,dict) else {}
+    for iid,row in list(config_instances.items())[:64]:
+        if not isinstance(row,dict) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,160}',str(iid)):
+            continue
+        eval_diag['instances'].append({
+            'instance':str(iid),'frame':str(row.get('timeframe') or ''),
+            'last_entry_evaluation_epoch':None,'entry_result':'NOT_OBSERVED',
+            'entry_symbols_observed':0,'last_exit_evaluation_epoch':None,
+            'exit_result':'NOT_OBSERVED','exit_legs_observed':0,
+        })
+    known={x['instance']:x for x in eval_diag['instances']}
+    statuses={'ENTRY_GATE_NO_ALLOW','ENTRY_GATE_ALLOW','SIGNAL_EVALUATION_ERROR',
+              'NO_OPPOSITE','OPPOSITE_SIGNAL','OPPOSITE_EXIT_ATTEMPTED',
+              'TRAIL_EXIT_ATTEMPTED','MANAGEMENT_ERROR',
+              'SKIPPED_UNSETTLED','SKIPPED_PENDING_EXIT','SKIPPED_PRICE',
+              'BLOCKED_BASKET_MISMATCH'}
+    try:
+        if eval_path.is_symlink():
+            eval_diag['state']='INVALID'
+        elif eval_path.is_file():
+            if eval_path.stat().st_size>128*1024:
+                raise ValueError('OVERSIZE')
+            observations=json.loads(eval_path.read_text(encoding='ascii'))
+            if (not isinstance(observations,dict)
+                or observations.get('schema')!='R4_EVALUATION_OBSERVATIONS_V1'):
+                raise ValueError('SCHEMA')
+            snapshot_ts=int(observations['updated_at_epoch'])
+            if snapshot_ts<=0 or snapshot_ts>stamp+5:
+                raise ValueError('TIME')
+            eval_diag['last_snapshot_epoch']=snapshot_ts
+            eval_diag['state']='OBSERVED_FRESH' if stamp-snapshot_ts<=300 else 'STALE'
+            for kind,field,last_field,result_field,count_field in (
+                ('ENTRY','entry_evaluations','last_entry_evaluation_epoch',
+                 'entry_result','entry_symbols_observed'),
+                ('EXIT','exit_evaluations','last_exit_evaluation_epoch',
+                 'exit_result','exit_legs_observed'),
+            ):
+                records=observations.get(field)
+                if not isinstance(records,list) or len(records)>256:
+                    raise ValueError('ROWS')
+                latest={}
+                seen={}
+                for record in records:
+                    if not isinstance(record,dict):
+                        raise ValueError('RECORD')
+                    iid=str(record.get('instance_id') or '')
+                    if iid not in known:
+                        continue
+                    epoch=int(record.get('evaluated_at_epoch') or 0)
+                    frame=str(record.get('frame') or '')
+                    symbol=str(record.get('symbol') or '')
+                    result=str(record.get('status') or '')
+                    if (epoch<=0 or epoch>snapshot_ts+5 or result not in statuses
+                        or frame!=known[iid]['frame']
+                        or not re.fullmatch(r'[A-Z0-9]{2,30}',symbol)):
+                        raise ValueError('ROW_CONTRACT')
+                    key=symbol
+                    if kind=='EXIT':
+                        key=str(record.get('leg_id') or '')
+                        side=str(record.get('side') or '')
+                        if (not re.fullmatch(r'[A-Za-z0-9_.:-]{1,160}',key)
+                            or side not in ('LONG','SHORT')):
+                            raise ValueError('EXIT_CONTRACT')
+                        eval_diag['position_evaluations'].append({
+                            'instance':iid,'frame':frame,'symbol':symbol,
+                            'side':side,'leg':key,'status':result,
+                            'last_evaluation_epoch':epoch,
+                            'fresh':stamp-epoch<=300,
+                        })
+                    seen.setdefault(iid,set()).add(key)
+                    if epoch>=latest.get(iid,(0,''))[0]:
+                        latest[iid]=(epoch,result)
+                for iid,(epoch,result) in latest.items():
+                    info=known[iid]
+                    info[last_field]=epoch
+                    info[result_field]=result
+                    info[count_field]=len(seen[iid])
+            eval_diag['position_evaluations']=eval_diag['position_evaluations'][:128]
+        # No file means instrumentation has not been deployed, not a PASS.
+    except (ValueError,TypeError,KeyError,OSError,UnicodeError):
+        eval_diag['state']='INVALID'
+        eval_diag['position_evaluations']=[]
+        for item in eval_diag['instances']:
+            item['last_entry_evaluation_epoch']=None
+            item['last_exit_evaluation_epoch']=None
+            item['entry_result']='NOT_OBSERVED'
+            item['exit_result']='NOT_OBSERVED'
+            item['entry_symbols_observed']=0
+            item['exit_legs_observed']=0
+    diag['evaluations']=eval_diag
+    if eval_diag['state']=='OBSERVED_FRESH':
+        latest=max(
+            [int(x.get('last_entry_evaluation_epoch') or 0) for x in eval_diag['instances']]
+            + [int(x.get('last_exit_evaluation_epoch') or 0) for x in eval_diag['instances']],
+            default=0,
+        )
+        if latest and 0<=stamp-latest<=300:
+            observed('signal','DIRECT_GATE_EVALUATION_OBSERVED',
+                     last_evaluation_epoch=latest,
+                     source='R4_PROCESS_ALLOWLISTED_SNAPSHOT',
+                     coverage_scope='OBSERVED_INSTANCES_ONLY')
     diag_raw=json.dumps(diag,sort_keys=True,allow_nan=False).encode()
     if len(diag_raw)>128*1024:raise RuntimeError('FEEDBACK_DIAGNOSTIC_LIMIT')
     payloads={'HEARTBEAT.json':json.dumps(heartbeat,sort_keys=True).encode(),'MARKET.json':json.dumps(market,sort_keys=True,allow_nan=False).encode(),'CONFIG.json':config_raw,'DIAGNOSTICS.json':diag_raw}

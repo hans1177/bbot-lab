@@ -25,6 +25,7 @@ import strategy_runtime
 from multi_strategy_runtime import MultiStrategyRuntime
 from r4_exchange_adapter import BinanceR4Exchange
 from r4_user_stream import R4UserStream
+from r4_evaluation_observer import R4EvaluationObserver
 import signal
 
 # ================= 설정 =================
@@ -206,6 +207,7 @@ class R4RuntimeService:
         self.exchange = BinanceR4Exchange(frozen_kernel.get_order())
         self.runtime = MultiStrategyRuntime(exchange=self.exchange)
         self.user_stream = R4UserStream(self.runtime, self.exchange)
+        self.evaluation_observer = R4EvaluationObserver(BASE / 'state/r4_execution_evaluations.json')
         self.cfg = _config()
         self._register_config_instances()
 
@@ -215,6 +217,15 @@ class R4RuntimeService:
             self.user_stream.close()
         finally:
             self.runtime.close()
+
+    def _eval_note(self, kind, instance_id, frame, symbol, status, leg_id='', side=''):
+        # A telemetry failure never changes signal/exit decisions or order routing.
+        try:
+            observer = getattr(self, 'evaluation_observer', None)
+            if observer is not None:
+                observer.note(kind, instance_id, frame, symbol, status, leg_id, side)
+        except Exception:
+            pass
 
     # ================= Runtime 등록 =================
     def _instance_trailing_version(self, row):
@@ -2347,13 +2358,17 @@ class R4RuntimeService:
             # 거래소와 수량이 불일치한 바스켓은 안전하게 보류한다.
             # 정상 바스켓의 기존 포지션 익절은 계속 관리한다.
             if (symbol, side) in blocked_pairs:
+                self._eval_note('EXIT', instance_id, leg.get('frame'), symbol, 'BLOCKED_BASKET_MISMATCH', leg_id, side)
                 continue
+            evaluating_signal = False
             try:
                 snap = self.runtime.ledger.leg_management_snapshot(leg_id)
                 # 아직 entry order 자체가 미종결이면 exit와 entry가 교차하지 않게 기다린다.
                 if str(snap.get("entry_intent_status") or "") not in {"FILLED", "CANCELLED"}:
+                    self._eval_note("EXIT", instance_id, leg.get("frame"), symbol, "SKIPPED_UNSETTLED", leg_id, side)
                     continue
                 if int(snap.get("owned_qty_units") or 0) <= 0 or int(snap.get("pending_exit_qty_units") or 0) > 0:
+                    self._eval_note("EXIT", instance_id, leg.get("frame"), symbol, "SKIPPED_PENDING_EXIT", leg_id, side)
                     continue
 
                 behavior, versions = self._leg_behavior_policy(snap)
@@ -2363,6 +2378,7 @@ class R4RuntimeService:
 
                 mark_price = frozen_kernel.get_price(symbol)
                 if mark_price <= 0:
+                    self._eval_note('EXIT', instance_id, leg.get('frame'), symbol, 'SKIPPED_PRICE', leg_id, side)
                     continue
                 mark_ticks = self.exchange.price_to_ticks(symbol, mark_price)
                 entry_ticks = int(snap.get("entry_vwap_ticks") or 0)
@@ -2457,6 +2473,7 @@ class R4RuntimeService:
                         reason=f"TRAILING:{exit_version}",
                     )
                     touched.add((instance_id, symbol))
+                    self._eval_note("EXIT", instance_id, leg.get("frame"), symbol, "TRAIL_EXIT_ATTEMPTED", leg_id, side)
                     _log(
                         "info",
                         f"TRAIL_EXIT:{leg_id}:{result.get('status')}",
@@ -2478,13 +2495,17 @@ class R4RuntimeService:
                     continue
                 if str(opposite.get("mode") or "STANDARD_COMBINED").upper() != "STANDARD_COMBINED":
                     raise RuntimeError("UNSUPPORTED_EXACT_EXIT_MODE")
+                evaluating_signal = True
                 decision = gate.evaluate_owned_position(
                     symbol, snap["frame"], snap["strategy_id"], state_mode=False,
                     strategy_instance_id=instance_id, exact_strategy_version=snap["strategy_version"],
                 )
+                evaluating_signal = False
                 decision_side = "LONG" if str(decision.get("side") or "").upper() == "BUY" else "SHORT" if str(decision.get("side") or "").upper() == "SELL" else ""
                 if int(decision.get("allow") or 0) != 1 or not decision_side or decision_side == side:
+                    self._eval_note("EXIT", instance_id, leg.get("frame"), symbol, "NO_OPPOSITE", leg_id, side)
                     continue
+                self._eval_note("EXIT", instance_id, leg.get("frame"), symbol, "OPPOSITE_SIGNAL", leg_id, side)
                 signal = str(decision.get("signal_id") or "")
                 if not signal:
                     raise RuntimeError("OWNED_EXIT_SIGNAL_ID_MISSING")
@@ -2496,6 +2517,7 @@ class R4RuntimeService:
                     reason=f"OPPOSITE_EXIT_TO_{decision_side}:{exit_version}",
                 )
                 touched.add((instance_id, symbol))
+                self._eval_note("EXIT", instance_id, leg.get("frame"), symbol, "OPPOSITE_EXIT_ATTEMPTED", leg_id, side)
                 _log(
                     "info",
                     f"OPPOSITE_EXIT:{leg_id}:{signal}:{result.get('status')}",
@@ -2503,6 +2525,8 @@ class R4RuntimeService:
                     sec=300,
                 )
             except Exception as exc:
+                self._eval_note("EXIT", instance_id, leg.get("frame"), symbol,
+                                "SIGNAL_EVALUATION_ERROR" if evaluating_signal else "MANAGEMENT_ERROR", leg_id, side)
                 touched.add((instance_id, symbol))
                 self.runtime.disable_entry_admission("LEG_MANAGEMENT_HARD_FAIL")
                 self._record_server_owned_boolean_evidence(
@@ -3108,9 +3132,15 @@ class R4RuntimeService:
                 cache_key = (symbol, frame, instance_id, str(instance.get("exact_strategy_version") or ""))
                 result = result_cache.get(cache_key)
                 if result is None:
-                    result = gate.evaluate_frame(
-                        symbol, frame, require_enabled=True, strategy_instance_id=instance_id,
-                    )
+                    try:
+                        result = gate.evaluate_frame(
+                            symbol, frame, require_enabled=True, strategy_instance_id=instance_id,
+                        )
+                    except Exception:
+                        self._eval_note("ENTRY", instance_id, frame, symbol, "SIGNAL_EVALUATION_ERROR")
+                        raise
+                    self._eval_note("ENTRY", instance_id, frame, symbol,
+                                    "ENTRY_GATE_ALLOW" if int(result.get("allow") or 0) == 1 else "ENTRY_GATE_NO_ALLOW")
                     result_cache[cache_key] = result
                 if int(result.get("allow") or 0) != 1:
                     continue
@@ -3219,7 +3249,14 @@ def main():
                 sec=60,
             )
         while not stop_requested[0]:
-            service.cycle()
+            try:
+                service.cycle()
+            finally:
+                try:
+                    service.evaluation_observer.flush()
+                except Exception as exc:
+                    _log('error', 'EVALUATION_OBSERVATION_WRITE_FAIL',
+                         '[R4][EVALUATION_OBSERVATION_WRITE_FAIL] type=' + type(exc).__name__, sec=300)
             if stop_requested[0]:
                 break
             sleep_sec = max(5, int(os.getenv("R4_LOOP_SEC", "15")))
