@@ -1556,6 +1556,99 @@ def _bundle_version_from_snapshot(snapshot):
     raw=json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(",",":"),default=str).encode("utf-8")
     return "PB_" + hashlib.sha256(raw).hexdigest()[:32]
 
+def _legacy_frozen_baseline_policy_pass(registry, instance, snapshot, request, trailing, state_reentry):
+    """Validate an existing CANARY's *frozen* baseline contract, never a new trial.
+
+    This is not individual-trailing/reentry optimization credit.  It is a
+    separate, fail-closed runtime-parity check for pre-NEW_MAIN instances.
+    """
+    req = request if isinstance(request, dict) else {}
+    research = req.get("research_evidence") or {}
+    if not isinstance(research, dict):
+        return False
+    if str(req.get("pipeline_contract") or research.get("pipeline_contract") or "") == "NEW_MAIN_LOCAL_SHADOW_V1":
+        return False
+    if isinstance(research.get("individual_trailing"), dict) and research["individual_trailing"]:
+        return False
+    if isinstance(research.get("individual_reentry"), dict) and research["individual_reentry"]:
+        return False
+
+    if not isinstance(instance, dict) or instance.get("status") != "CANARY":
+        return False
+    if instance.get("approved_for_server_release") is not True:
+        return False
+    if instance.get("canary_authorized") is not True:
+        return False
+    origin = instance.get("evidence") or {}
+    if not isinstance(origin, dict):
+        return False
+    origin_name = origin.get("source")
+    if origin_name == "R4_EXISTING_DEPLOYMENT_MIGRATION":
+        pass
+    elif origin_name == "V3_DEPLOYMENT_CREATE_PROVISIONAL":
+        if origin.get("full_validation_pass") is not True or origin.get("sealed_blind_pass") is not True:
+            return False
+    else:
+        return False
+    expected_reasons = {
+        "R4_EXISTING_CANARY_EXACT_INSTANCE_SHADOW_PASS",
+        "MINIMAL_SHADOW_RUNTIME_GATE_PASS",
+    }
+    career = instance.get("career") or []
+    if not isinstance(career, list) or not any(
+        isinstance(event, dict)
+        and event.get("event") == "CANARY"
+        and isinstance(event.get("evidence"), dict)
+        and event["evidence"].get("reason") in expected_reasons
+        for event in career
+    ):
+        return False
+
+    version_id = str(instance.get("exact_strategy_version") or "")
+    versions = registry.get("strategy_versions") or {}
+    version = versions.get(version_id) if isinstance(versions, dict) else None
+    if not isinstance(version, dict) or version.get("status") != "CANARY":
+        return False
+    payload = version.get("payload") or {}
+    if (not isinstance(payload, dict)
+        or str(payload.get("strategy") or "").upper() != str(instance.get("strategy_id") or "").upper()
+        or str(payload.get("timeframe") or "").upper() != str(instance.get("timeframe") or "").upper()
+        or str(req.get("strategy_version") or req.get("version_id") or "") != version_id):
+        return False
+
+    # A partial individual policy must NEVER be silently treated as legacy.
+    if (trailing.get("individual_strategy_binding") is not None
+        or state_reentry.get("individual_strategy_binding") is not None
+        or "individual_mode" in state_reentry
+        or "trigger" in state_reentry):
+        return False
+
+    cfg = load_json(ROOT / "strategy_config.json", {})
+    behavior = snapshot.get("behavior_policy") or {}
+    if (not isinstance(cfg, dict) or not isinstance(behavior, dict)
+        or not isinstance(trailing, dict) or not isinstance(state_reentry, dict)
+        or not trailing or not state_reentry
+        or behavior.get("trailing") != cfg.get("trailing")
+        or behavior.get("state_reentry") != cfg.get("state_reentry")):
+        return False
+    try:
+        start = float(trailing.get("start_pct"))
+        callback = float(trailing.get("callback_pct"))
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        math.isfinite(start) and math.isfinite(callback)
+        and start > callback > 0
+        and trailing.get("enabled") is True
+        and trailing.get("dynamic_adjustment") is False
+        and str(trailing.get("mode") or "").upper() == "FIXED_BASELINE"
+        and state_reentry.get("enabled") is True
+        and state_reentry.get("dynamic_policy") is False
+        and str(state_reentry.get("mode") or "").upper() == "CURRENT_STATE"
+        and str(state_reentry.get("next_check_tf") or "").upper() == "1H"
+    )
+
+
 def _strategy_instance_policy_snapshot_check(frame_state,request):
     fr=frame_state if isinstance(frame_state,dict) else {}
     req=request if isinstance(request,dict) else {}
@@ -1597,7 +1690,15 @@ def _strategy_instance_policy_snapshot_check(frame_state,request):
         )
     except Exception:
         trailing_ok=False
-    if not trailing_ok:
+    # Existing frozen-baseline contracts are checked separately, not marked
+    # as individual-policy optimizations.  New pipelines cannot use this path.
+    legacy_baseline_ok = (
+        not errors
+        and _legacy_frozen_baseline_policy_pass(
+            registry, instance, snapshot, req, trailing, state_reentry
+        )
+    )
+    if not trailing_ok and not legacy_baseline_ok:
         errors.append("INDIVIDUAL_TRAILING_SNAPSHOT_BINDING_FAIL")
 
     mode=str(selected_reentry.get("mode") or "CURRENT_STATE_NEXT_1H").upper()
@@ -1614,7 +1715,7 @@ def _strategy_instance_policy_snapshot_check(frame_state,request):
             and state_reentry.get("opposite_state_cancels") is True
             and state_reentry.get("same_bar_immediate_reorder_forbidden") is True
         )
-    if not reentry_ok:
+    if not reentry_ok and not legacy_baseline_ok:
         errors.append("INDIVIDUAL_REENTRY_SNAPSHOT_BINDING_FAIL")
     if not str(versions.get("EXIT") or "").strip():
         errors.append("EXIT_POLICY_VERSION_MISSING")
@@ -1627,6 +1728,8 @@ def _strategy_instance_policy_snapshot_check(frame_state,request):
         "policy_bundle_version":bundle,
         "trailing_binding_pass":trailing_ok,
         "reentry_binding_pass":reentry_ok,
+        "policy_contract_mode":"LEGACY_FROZEN_BASELINE_V1" if legacy_baseline_ok else "INDIVIDUAL_STRATEGY_V1",
+        "legacy_frozen_baseline_policy_pass":bool(legacy_baseline_ok),
         "selected_trailing":selected_trailing,
         "selected_reentry":selected_reentry,
     }
@@ -2197,13 +2300,18 @@ def shadow_pass_from_gate(
             "strategy_instance_policy_snapshot_pass"
         ) is True
 
-        and gate.get(
-            "individual_trailing_snapshot_binding_pass"
-        ) is True
-
-        and gate.get(
-            "individual_reentry_snapshot_binding_pass"
-        ) is True
+        and (
+            (
+                gate.get("individual_trailing_snapshot_binding_pass") is True
+                and gate.get("individual_reentry_snapshot_binding_pass") is True
+            )
+            or (
+                gate.get("policy_contract_mode") == "LEGACY_FROZEN_BASELINE_V1"
+                and gate.get("legacy_frozen_baseline_policy_pass") is True
+                and gate.get("individual_trailing_snapshot_binding_pass") is False
+                and gate.get("individual_reentry_snapshot_binding_pass") is False
+            )
+        )
 
         and gate.get(
             "order_quantity_calculation_pass"
@@ -3442,6 +3550,12 @@ def produce_shadow_evidence(
 
         "individual_reentry_snapshot_binding_pass":
             bool((snapshot_details or {}).get("reentry_binding_pass")),
+
+        # Distinct evidence: baseline parity must not impersonate optimized bindings.
+        "policy_contract_mode":
+            str((snapshot_details or {}).get("policy_contract_mode") or ""),
+        "legacy_frozen_baseline_policy_pass":
+            (snapshot_details or {}).get("legacy_frozen_baseline_policy_pass") is True,
 
         "order_quantity_calculation_pass":
             bool(order_quantity_pass),
