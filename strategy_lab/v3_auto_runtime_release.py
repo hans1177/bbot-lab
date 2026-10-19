@@ -1242,6 +1242,94 @@ def verify_local(logic_verify_mode="RELEASE_CANDIDATE"):
             )
 
 
+def _github_research_checkpoint_blobs(entries, api):
+    """Read immutable GitHub research checkpoints in legacy or chunked form.
+
+    Return the exact V1 receipt and archive bytes. The caller continues to
+    validate constitution, engine, individual files and all release gates.
+    """
+    import base64, hashlib, re
+
+    if not isinstance(entries, dict):
+        raise RuntimeError('GITHUB_RESEARCH_TREE_INVALID')
+
+    def read_blob(name, limit):
+        row = entries.get(name)
+        if (not isinstance(row, dict) or row.get('type') != 'blob'
+            or not isinstance(row.get('size'), int)
+            or not 0 < row['size'] <= limit
+            or not re.fullmatch('[0-9a-f]{40}', str(row.get('sha') or ''))):
+            raise RuntimeError('GITHUB_RESEARCH_BLOB_INVALID:' + name)
+        item = api('/git/blobs/' + row['sha'])
+        if (not isinstance(item, dict) or item.get('encoding', 'base64') != 'base64'
+            or not isinstance(item.get('content'), str)):
+            raise RuntimeError('GITHUB_RESEARCH_BLOB_ENCODING:' + name)
+        try:
+            data = base64.b64decode(
+                item['content'].replace(chr(10), '').replace(chr(13), ''),
+                validate=True,
+            )
+        except (ValueError, base64.binascii.Error) as exc:
+            raise RuntimeError('GITHUB_RESEARCH_BLOB_BASE64:' + name) from exc
+        if len(data) != row['size'] or len(data) != item.get('size'):
+            raise RuntimeError('GITHUB_RESEARCH_BLOB_SIZE:' + name)
+        return data
+
+    receipt_raw = read_blob('CHECKPOINT.json', 4 * 1024**2)
+    if set(entries) == {'CHECKPOINT.json', 'checkpoint.zip'}:
+        return {
+            'CHECKPOINT.json': receipt_raw,
+            'checkpoint.zip': read_blob('checkpoint.zip', 90 * 1024**2),
+        }
+
+    manifest_raw = read_blob('checkpoint.parts.json', 1024**2)
+    try:
+        manifest = json.loads(manifest_raw)
+        receipt = json.loads(receipt_raw)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError('GITHUB_RESEARCH_PARTS_MANIFEST_INVALID') from exc
+    chunk_size = 8 * 1024**2
+    parts = manifest.get('parts')
+    if (manifest.get('schema') != 'B_BOT_RESEARCH_CHECKPOINT_PARTS_V1'
+        or manifest.get('chunk_bytes') != chunk_size
+        or receipt.get('schema') != 'B_BOT_RESEARCH_CHECKPOINT_V1'
+        or manifest.get('archive_sha256') != receipt.get('archive_sha256')
+        or not isinstance(parts, list) or not 1 <= len(parts) <= 64):
+        raise RuntimeError('GITHUB_RESEARCH_PARTS_MANIFEST_INVALID')
+
+    expected = {'CHECKPOINT.json', 'checkpoint.parts.json'}
+    total = 0
+    for index, part in enumerate(parts):
+        name = 'checkpoint.part' + str(index).zfill(4)
+        if (not isinstance(part, dict)
+            or set(part) != {'name', 'bytes', 'sha256'}
+            or part.get('name') != name
+            or not isinstance(part.get('bytes'), int)
+            or not 0 < part['bytes'] <= chunk_size
+            or (index < len(parts)-1 and part['bytes'] != chunk_size)
+            or not re.fullmatch('[0-9a-f]{64}', str(part.get('sha256') or ''))):
+            raise RuntimeError('GITHUB_RESEARCH_PART_DESCRIPTOR_INVALID')
+        expected.add(name)
+        total += part['bytes']
+    if (set(entries) != expected
+        or manifest.get('archive_bytes') != total
+        or not 0 < total <= 90 * 1024**2):
+        raise RuntimeError('GITHUB_RESEARCH_PART_SET_INVALID')
+
+    digest = hashlib.sha256()
+    blocks = []
+    for part in parts:
+        raw = read_blob(part['name'], chunk_size)
+        if (len(raw) != part['bytes']
+            or hashlib.sha256(raw).hexdigest() != part['sha256']):
+            raise RuntimeError('GITHUB_RESEARCH_PART_HASH_INVALID')
+        digest.update(raw)
+        blocks.append(raw)
+    if digest.hexdigest() != manifest['archive_sha256']:
+        raise RuntimeError('GITHUB_RESEARCH_ARCHIVE_HASH_INVALID')
+    return {'CHECKPOINT.json': receipt_raw, 'checkpoint.zip': b''.join(blocks)}
+
+
 def pull(label, research_only=False, runtime_feedback=False):
     if runtime_feedback:
         import base64,re,tempfile,urllib.request,urllib.error
@@ -1358,13 +1446,8 @@ def pull(label, research_only=False, runtime_feedback=False):
                 commit=api('/git/commits/'+head)
                 tree=api('/git/trees/'+commit['tree']['sha'])['tree']
                 entries={row['path']:row for row in tree}
-                if set(entries)!={'CHECKPOINT.json','checkpoint.zip'}:raise RuntimeError('GITHUB_RESEARCH_TREE_INVALID')
-                blobs={}
-                for name,item in entries.items():
-                    if item['type']!='blob' or item.get('size',0)>90*1024**2:raise RuntimeError('GITHUB_RESEARCH_BLOB_INVALID')
-                    value=api('/git/blobs/'+item['sha']);raw=base64.b64decode(value['content'])
-                    if len(raw)!=value['size']:raise RuntimeError('GITHUB_RESEARCH_BLOB_SIZE')
-                    blobs[name]=raw
+                # Legacy and verified chunked Git transport both yield exact V1 ZIP bytes.
+                blobs=_github_research_checkpoint_blobs(entries,api)
                 receipt=json.loads(blobs['CHECKPOINT.json'])
                 if receipt.get('schema')!='B_BOT_RESEARCH_CHECKPOINT_V1' or hashlib.sha256(blobs['checkpoint.zip']).hexdigest()!=receipt.get('archive_sha256'):raise RuntimeError('GITHUB_RESEARCH_CHECKPOINT_HASH')
                 if receipt.get('constitution_sha256')!=sha256(ROOT/'ROADMAP_CONSTITUTION_V3.json'):raise RuntimeError('GITHUB_RESEARCH_CONSTITUTION_MISMATCH')
