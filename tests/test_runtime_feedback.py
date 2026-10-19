@@ -34,6 +34,27 @@ class RuntimeFeedbackTests(unittest.TestCase):
         self.assertEqual(len(self.payload('MARKET.json')['bars']['BTCUSDT']['1H']),160)
         push=next(command for command,_ in self.calls if command[2]=='push');self.assertIn('--force-with-lease=refs/heads/runtime-feedback:'+'a'*40,push);self.assertTrue(push[-1].endswith(':refs/heads/runtime-feedback'));self.assertNotIn('refs/heads/main',' '.join(push))
         commit=next(command for command,_ in self.calls if command[2]=='commit-tree');self.assertNotIn('-p',commit)
+    def test_existing_systemd_restart_policy_is_observed_read_only(self):
+        # 파일명: test_runtime_feedback.py / R4 복구 설정을 추정하지 않고 실제 systemd 출력만 기록한다.
+        original=self.config.read_bytes()
+        def systemd_and_git(command, **kwargs):
+            if command[:3]==['systemctl','show','r4-runtime.service']:
+                return types.SimpleNamespace(returncode=0,stdout='on-failure\\n')
+            return self.git(command,**kwargs)
+        with patch.object(subprocess,'run',systemd_and_git):
+            self.publish([], 'd'*40)
+        runtime=self.payload('DIAGNOSTICS.json')['modules']['runtime']
+        self.assertEqual(runtime['systemd_restart_policy'],'on-failure')
+        self.assertEqual(self.config.read_bytes(),original)
+        self.assertFalse((self.state/'history.db').exists())
+
+    def test_systemd_restart_policy_unavailable_is_unknown(self):
+        self.call()
+        self.assertEqual(
+            self.payload('DIAGNOSTICS.json')['modules']['runtime']['systemd_restart_policy'],
+            'UNKNOWN',
+        )
+
     def test_stale_collector_cannot_publish(self):
         heartbeat=json.loads(self.heartbeat.read_text());heartbeat['updated_at_epoch']=time.time()-181;self.heartbeat.write_text(json.dumps(heartbeat))
         with self.assertRaisesRegex(RuntimeError,'COLLECTOR_NOT_LIVE'):self.call()
