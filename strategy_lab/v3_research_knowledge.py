@@ -258,13 +258,37 @@ def save_cloud_checkpoint():
 
 def publish_cloud_checkpoint(include_candidates=False):
     import sys
-    import base64,json,os,urllib.request,urllib.error
+    import base64,hashlib,json,os,time,urllib.request,urllib.error
     from pathlib import Path
     api='https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']
     def request(path,data=None,method=None):
         body=None if data is None else json.dumps(data).encode()
         req=urllib.request.Request(api+path,data=body,method=method,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'})
-        with urllib.request.urlopen(req,timeout=90) as response:return json.load(response)
+        # 읽기와 불변 객체 생성만 재시도. 참조 갱신은 중복 실행하지 않는다.
+        retry_safe=data is None or path in {'/git/blobs','/git/trees','/git/commits'}
+        for attempt in range(4):
+            try:
+                with urllib.request.urlopen(req,timeout=90) as response:return json.load(response)
+            except urllib.error.HTTPError as error:
+                raw=error.read(4096)
+                try:message=str(json.loads(raw).get('message',''))
+                except (ValueError,AttributeError):message=''
+                message=message.replace(os.environ['GH_TOKEN'],'[REDACTED]')
+                message=' '.join(message.split())[:300]
+                throttled=any(word in message.lower() for word in ('rate limit','abuse','spam'))
+                transient=error.code in {429,500,502,503,504} or (error.code in {403,422} and throttled)
+                delay=60
+                retry_after=(error.headers or {}).get('Retry-After','')
+                if str(retry_after).isdigit():delay=max(60,int(retry_after))
+                if not retry_safe or not transient or attempt==3 or delay>60:
+                    print('RESEARCH_CHECKPOINT_HTTP_FAILED',path,error.code,'attempts',attempt+1,'bytes',len(body or b''),'reason',message,file=sys.stderr)
+                    raise
+                if attempt==0:print('RESEARCH_CHECKPOINT_HTTP_RETRY',path,error.code,'reason',message,file=sys.stderr)
+                time.sleep(delay)
+            except (urllib.error.URLError,TimeoutError):
+                if not retry_safe or attempt==3:raise
+                if attempt==0:print('RESEARCH_CHECKPOINT_NETWORK_RETRY',path,file=sys.stderr)
+                time.sleep(30)
     for branch,folder in [('research-state','research-checkpoint-out')]+([('runtime-candidates','runtime-candidates-out')] if include_candidates else []):
         out=Path(os.environ['RUNNER_TEMP'])/folder
         if not out.exists():continue
@@ -278,12 +302,18 @@ def publish_cloud_checkpoint(include_candidates=False):
             if not lease.is_file():raise RuntimeError('CHECKPOINT_RESTORE_LEASE_MISSING')
             expected=json.loads(lease.read_text())['head']
             if parent!=expected:raise RuntimeError('CHECKPOINT_REMOTE_STATE_CHANGED')
-        elements=[]
+        cache_path=Path(os.environ['RUNNER_TEMP'])/(branch+'-uploaded.json')
+        cache=json.loads(cache_path.read_text()) if cache_path.is_file() else {}
+        cached=cache.get('files',{}) if cache.get('head')==parent else {}
+        elements=[];uploaded={}
         for path in sorted(out.rglob('*')):
             if not path.is_file():continue
             name=path.relative_to(out).as_posix();raw=path.read_bytes()
             if len(raw)>90*1024**2:raise RuntimeError('CHECKPOINT_GIT_BLOB_LIMIT')
-            blob=request('/git/blobs',{'content':base64.b64encode(raw).decode(),'encoding':'base64'})
+            digest=hashlib.sha256(raw).hexdigest()
+            previous=cached.get(name,{})
+            blob={'sha':previous['sha']} if previous.get('digest')==digest else request('/git/blobs',{'content':base64.b64encode(raw).decode(),'encoding':'base64'})
+            uploaded[name]={'digest':digest,'sha':blob['sha']}
             elements.append({'path':name,'mode':'100644','type':'blob','sha':blob['sha']})
         tree=request('/git/trees',{'tree':elements})
         commit=request('/git/commits',{'message':branch+' run '+os.environ['GITHUB_RUN_ID']+' attempt '+os.environ['GITHUB_RUN_ATTEMPT'],'tree':tree['sha'],'parents':[parent] if parent else []})
@@ -291,4 +321,5 @@ def publish_cloud_checkpoint(include_candidates=False):
         else:request('/git/refs',{'ref':'refs/heads/'+branch,'sha':commit['sha']})
         if request('/git/ref/heads/'+branch)['object']['sha']!=commit['sha']:raise RuntimeError('CHECKPOINT_REF_VERIFY')
         if branch=='research-state':atomic(lease,{'head':commit['sha']})
+        atomic(cache_path,{'head':commit['sha'],'files':uploaded})
         print('PRIVATE_GIT_HANDOFF_SAVED_AND_VERIFIED',branch,commit['sha'],file=sys.stderr)

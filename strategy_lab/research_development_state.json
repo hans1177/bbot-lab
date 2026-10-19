@@ -2,10 +2,10 @@
   "schema": "B_BOT_RESEARCH_DEVELOPMENT_STATE_V1",
   "updated_at": "2026-10-19",
   "repository": "hans1177/bbot-lab",
-  "branch": "main",
+  "branch": "research-checkpoint",
   "base_main": "7a121b3e91efb3ac429b523a427bd8fc64d36fbf",
   "research_unblock_main": "63aea437b46d1cc501fa63f1aadb281df5bf8bd0",
-  "status": "BOUNDED_GENETIC_ALLOCATION_IMPLEMENTED_PENDING_REMOTE_VERIFICATION",
+  "status": "CHECKPOINT_HTTP_RECOVERY_LOCALLY_VERIFIED_PENDING_REMOTE",
   "authorized_scope": [
     "3 distinct timeframe compute workers; one logical state writer",
     "bounded 5 hour execution with intermediate remote checkpoints",
@@ -30,6 +30,7 @@
     "224 local tests passed after adding a fixed one-in-four new-research turn for bounded GA/Optuna candidates; basic three-frame batches and downstream bucket weights retained."
   ],
   "pending": [
+    "Verify checkpoint HTTP changes remotely before main; current user asks about suspected opposite live entries, exact symbol/entry evidence requested; no live position direction conclusion.",
     "Observe long scheduled run and trailing/reentry/full/blind stage progress; do not infer profitability from execution success.",
     "Verify bounded GA/Optuna pilot runtime, sealed-wave resume and AWS receipt; new exit/reentry parity and broader meta research remain outstanding.",
     "Review server-rejected/trading-locked strategies from actual evidence without modifying orders, tiers or leverage.",
@@ -118,5 +119,17 @@
     "allocation": "one of four NEW_PURE_AND_HARD_PASS dispatches; persist frame rotation; completed candidates skipped",
     "runtime_configuration_changed": false,
     "scope": "Finite training-only GA and Optuna proposal pilot, not final validation or full meta-learning. Official hard-pass and all downstream gates remain required."
+  },
+  "checkpoint_http_recovery": {
+    "failed_run": 39201189458,
+    "failure": "HTTP 422 creating Git blob; API reason absent from old logs; root cause unconfirmed",
+    "successful_remote_saves_before_failure": 46,
+    "changes": [
+      "Bounded retry only for safe immutable requests and transient HTTP failures",
+      "Validation 422 remains fail-closed; structured error reason and request size",
+      "Reuse unchanged blobs only after verified matching remote commit"
+    ],
+    "local_tests": 282,
+    "remote_verified": false
   }
 }

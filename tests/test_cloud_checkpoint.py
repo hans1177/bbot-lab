@@ -41,7 +41,7 @@ class CloudCheckpointTests(unittest.TestCase):
         self.run_step('Preserve research checkpoint')
         with zipfile.ZipFile(self.base/'research-checkpoint-out/checkpoint.zip') as archive:
             self.assertEqual(json.loads(archive.read('strategy_lab/results/v3/trial_ledger.json')),{'completed':2})
-    def publish(self,head='original',lease='original'):
+    def publish(self,head='original',lease='original',failures=None,twice=False):
         self.run_step('Preserve research checkpoint')
         if lease is not None:(self.base/'research-state-head.json').write_text(json.dumps({'head':lease}))
         spec=importlib.util.spec_from_file_location('checkpoint_knowledge',REPO/'strategy_lab/v3_research_knowledge.py')
@@ -51,6 +51,10 @@ class CloudCheckpointTests(unittest.TestCase):
             body=json.loads(req.data) if req.data else None
             path=req.full_url.split('/repos/owner/repo')[1]
             self.requests.append((path,body))
+            if path=='/git/blobs' and failures:
+                import urllib.error
+                code,message=failures.pop(0)
+                raise urllib.error.HTTPError(req.full_url,code,'fixture',{},io.BytesIO(json.dumps({'message':message}).encode()))
             if path=='/git/ref/heads/research-state':result={'object':{'sha':remote['head']}}
             elif path=='/git/commits':
                 self.assertEqual(body['parents'],[remote['head']]);result={'sha':'new-commit'}
@@ -59,7 +63,29 @@ class CloudCheckpointTests(unittest.TestCase):
             else:result={'sha':'object'}
             return io.StringIO(json.dumps(result))
         env=dict(self.env,GH_TOKEN='fixture',GITHUB_REPOSITORY='owner/repo',GITHUB_RUN_ATTEMPT='1')
-        with patch.dict(os.environ,env),patch('urllib.request.urlopen',side_effect=request):module.publish_cloud_checkpoint()
+        with patch.dict(os.environ,env),patch('urllib.request.urlopen',side_effect=request),patch('time.sleep') as sleep:
+            try:
+                module.publish_cloud_checkpoint()
+                if twice:module.publish_cloud_checkpoint()
+            finally:self.sleeps=sleep.call_count
+    def test_rate_limited_blob_retries_then_updates_lease(self):
+        self.publish(failures=[(422,'You have triggered a secondary rate limit')])
+        self.assertEqual(self.sleeps,1)
+        self.assertEqual(json.loads((self.base/'research-state-head.json').read_text())['head'],'new-commit')
+    def test_validation_422_is_not_retried_or_committed(self):
+        import urllib.error
+        with self.assertRaises(urllib.error.HTTPError):self.publish(failures=[(422,'Validation Failed')])
+        self.assertEqual(self.sleeps,0)
+        self.assertFalse(any(path=='/git/commits' for path,_ in self.requests))
+        self.assertEqual(json.loads((self.base/'research-state-head.json').read_text())['head'],'original')
+    def test_temporary_server_failure_retry_is_bounded(self):
+        import urllib.error
+        with self.assertRaises(urllib.error.HTTPError):self.publish(failures=[(503,'Unavailable')]*4)
+        self.assertEqual(self.sleeps,3)
+        self.assertFalse(any(path=='/git/commits' for path,_ in self.requests))
+    def test_unchanged_verified_blobs_are_not_uploaded_again(self):
+        self.publish(twice=True)
+        self.assertEqual(sum(path=='/git/blobs' for path,_ in self.requests),2)
     def test_remote_advance_blocks_stale_checkpoint_before_any_write(self):
         with self.assertRaisesRegex(RuntimeError,'CHECKPOINT_REMOTE_STATE_CHANGED'):self.publish(head='other-run')
         self.assertTrue(all(body is None for _,body in self.requests))
