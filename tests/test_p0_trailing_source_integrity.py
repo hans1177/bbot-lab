@@ -69,7 +69,7 @@ class ExactTrailingSourceIntegrityTests(unittest.TestCase):
             "hard_pass_dates":lambda:("2016-01-01","2024-12-31"),
             "_trailing_pair_key":lambda *args:"PAIR",
             "time":SimpleNamespace(time=lambda:1.0),
-            "subprocess":SimpleNamespace(run=lambda *args,**kw:SimpleNamespace(returncode=0,stdout="")),
+            "subprocess":SimpleNamespace(PIPE=-1,STDOUT=-2,run=lambda *args,**kw:SimpleNamespace(returncode=0,stdout="")),
             "find_result":lambda *args:self.root/"strategy_lab/results/v3/synthetic.json",
             "load":lambda *args:report,
             "_trailing_evidence":lambda *args:{"trades":500,"expectancy_pct":0.1},
