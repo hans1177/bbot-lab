@@ -8764,6 +8764,42 @@
       "bytes": 458635,
       "sha256": "98918c0855309f12a6377cc3a656e092b737d428adb6600c613c8a59cfe21bbb"
     },
+    "strategy_lab/results/20261019_202514_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 459043,
+      "sha256": "e99357a69583f6d286fa9c4beaeed4e64b2c4bd6ecea195f20443deb6defab03"
+    },
+    "strategy_lab/results/20261019_202521_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 458956,
+      "sha256": "af05fb84e82fc58a77c590b9a4ce80f26c057ba3cf748491592ce177211742aa"
+    },
+    "strategy_lab/results/20261019_202528_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 458990,
+      "sha256": "a348599b11bbf2938ce30356fca086f33c8eb4dbf91bfc97c2e6d80713c57c52"
+    },
+    "strategy_lab/results/20261019_202534_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 459259,
+      "sha256": "d96666b2f2b5d2f964449835ad2d9c4cff736c7c767f04fab5be7b38a6a9fe5a"
+    },
+    "strategy_lab/results/20261019_202541_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 458955,
+      "sha256": "400cc9466c2f6633657ab8b221f8a84437c349c3e69da171af0ac126c8b0edc5"
+    },
+    "strategy_lab/results/20261019_202548_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 458296,
+      "sha256": "7df0d573317703b047842c018471dbf634246fc46aca8c5829a425b83e37934b"
+    },
+    "strategy_lab/results/20261019_202555_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 458108,
+      "sha256": "92fb1ca0d88301f4d3b767d532a65a27e638d65aaf21efa67ac427a799e3b9e0"
+    },
+    "strategy_lab/results/20261019_202601_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 457934,
+      "sha256": "b76bc13a2cea3e6b40a8e0502dfb21165f79850144a73b578c7c999c8e122ecc"
+    },
+    "strategy_lab/results/20261019_202608_V3_SAFE_CHANNEL_Z_W12_T0P4_6H_BROAD_V1.json": {
+      "bytes": 458287,
+      "sha256": "df5c5926ed07b83b908c515395f684ac84e0b22a533294dd26fc18cfa92c784f"
+    },
     "strategy_lab/results/v3/auto_runtime_release_state.json": {
       "bytes": 156,
       "sha256": "6e2c0b2d38c60f42aa97c7142b0a37c39e0b965d39b9ffe97a87e19cf2be9b7d"
@@ -11170,15 +11206,15 @@
     },
     "strategy_lab/results/v3/historical_314_pipeline_stage2.json": {
       "bytes": 1550897,
-      "sha256": "b1b27a6916c815f349d2614227ecb0359c695dbabc01763432de94be3c2a1e07"
+      "sha256": "3a5c3fdb7337804f4912e00b9112cf6365e4b556cb1654e7939d07bce85fcd16"
     },
     "strategy_lab/results/v3/individual_reentry_final_risk_stage4.json": {
       "bytes": 960919,
       "sha256": "636301ce7059c659480a523bb2561ea558122d4ab297da5d0d6791b29e76f31e"
     },
     "strategy_lab/results/v3/individual_trailing_stage3.json": {
-      "bytes": 1778244,
-      "sha256": "3aa0acdb2e61a1e028114e812f1562e5b66f5016297f64fdaf5bfcc0c35905dd"
+      "bytes": 1788158,
+      "sha256": "6b84eeda4331b2a5142af6184ab90c3e8c821415ad79adfc18ce895a122c9275"
     },
     "strategy_lab/results/v3/redeveloped_strategies/v3_adaptive_channel_rfull_validation_1.py": {
       "bytes": 2954,
@@ -11293,8 +11329,8 @@
       "sha256": "67a043b9583e918eccacb8b4463ad363f6e58079ef0a546f1cc8d76c0ba00cf3"
     },
     "strategy_lab/results/v3/roadmap_queue.json": {
-      "bytes": 386145,
-      "sha256": "b0ff82e6542f8c5cd122b4eb6fce3c8d3b14e73369a83a09c44f54899836b674"
+      "bytes": 386141,
+      "sha256": "c845122bdf329879bfe0abd5c8fca94f47346018a6163799a0da68bdd939281c"
     },
     "strategy_lab/results/v3/runtime_diagnostics.json": {
       "bytes": 9465,
@@ -11305,9 +11341,9 @@
       "sha256": "c320971a75e5b6b3c1dc6804b1243d0d9ee69c6d82df393900622b636440c697"
     },
     "strategy_lab/results/v3/trial_ledger.json": {
-      "bytes": 1384224,
-      "sha256": "d334da64ad76520326e125324c170fc131399acf6a256beeff78f78f82631a8e"
+      "bytes": 1390173,
+      "sha256": "e7d4fb7936fe29ec8e7c33ac409f584aa2b3638ec9bb3129e5c9621dd4d5c528"
     }
   },
-  "archive_sha256": "7029f2145fc4abfbe617efd9117b521797394d52ab950bd187713b757898f2aa"
+  "archive_sha256": "f982e92cddd4bd2ee6ed58fd87f5a8155fccdb9674f9fa2cc00c9d9eb6068d1d"
 }
