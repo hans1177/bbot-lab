@@ -169,6 +169,9 @@ def _risk(base):
 
 def answer(text, base=BASE, now=None):
     """Read-only; return a bounded plain-text reply, never secret or account credentials."""
+    if os.getenv("TELEGRAM_RESERVATION_QUERY") == "1":
+        from telegram_reservation_bridge import reservation_answer
+        return reservation_answer(text, base=base, now=now)
     cmd = command_for(text)
     now = time.time() if now is None else now
     stamp = datetime.fromtimestamp(now, KST).strftime("%Y-%m-%d %H:%M KST")
@@ -288,12 +291,25 @@ def poll_once(token, chat_id, user_id, base=BASE, api=_api):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--poll-once", action="store_true")
+    parser.add_argument("--use-reservation", action="store_true",
+                        help="use the deployed 5-minute reservation.py reporter account and chat")
     args = parser.parse_args()
     if not args.poll_once:
-        parser.error("Use --poll-once (no daemon/autostart) only after Telegram operator preflight")
-    token = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN") or ""
-    chat_id = os.getenv("TELEGRAM_ALLOWED_CHAT_ID") or ""
-    user_id = os.getenv("TELEGRAM_ALLOWED_USER_ID") or ""
+        parser.error("Use --poll-once only after Telegram owner preflight")
+    if args.use_reservation:
+        # The private conversation chat ID is also the user's Telegram ID.
+        # The imported reporter is never executed as a script.
+        from telegram_reservation_bridge import reservation_credentials
+        try:
+            token, chat_id = reservation_credentials(BASE)
+        except Exception:
+            raise SystemExit("RESERVATION_CREDENTIALS_UNAVAILABLE") from None
+        user_id = chat_id
+        os.environ["TELEGRAM_RESERVATION_QUERY"] = "1"
+    else:
+        token = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN") or ""
+        chat_id = os.getenv("TELEGRAM_ALLOWED_CHAT_ID") or ""
+        user_id = os.getenv("TELEGRAM_ALLOWED_USER_ID") or ""
     if not re.fullmatch(r"\d{6,12}:[A-Za-z0-9_-]{25,}", token):
         raise SystemExit("TELEGRAM_TOKEN_NOT_SET")
     if not chat_id.isdecimal() or not user_id.isdecimal():
