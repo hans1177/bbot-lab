@@ -1273,7 +1273,7 @@ def pull(label, research_only=False, runtime_feedback=False):
         if not 0<=time.time()-float(manifest.get('created_at_epoch') or 0)<=180:return {'status':'WAIT_FRESH_SERVER_FEEDBACK'}
         current=api('/git/ref/heads/runtime-candidates')['object']['sha']
         if manifest.get('received_commit')!=current:return {'status':'WAIT_SERVER_CANDIDATE_RECEIPT'}
-        raw_files={name:blob(name,8*1024**2 if name=='MARKET.json' else 128*1024 if name=='DIAGNOSTICS.json' else 1024**2) for name in files}
+        raw_files={name:blob(name,8*1024**2 if name=='MARKET.json' else 512*1024 if name=='DIAGNOSTICS.json' else 1024**2) for name in files}
         for name,raw in raw_files.items():
             if len(raw)!=files[name].get('bytes') or hashlib.sha256(raw).hexdigest()!=files[name].get('sha256'):raise RuntimeError('FEEDBACK_HASH_MISMATCH:'+name)
         config=json.loads(raw_files['CONFIG.json']);heartbeat=json.loads(raw_files['HEARTBEAT.json']);market=json.loads(raw_files['MARKET.json'])
@@ -3601,3 +3601,4 @@ if __name__ == "__main__":
     raise SystemExit(
         main()
     )
+
