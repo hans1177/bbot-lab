@@ -123,7 +123,7 @@ def _trades(base, now):
         return "\n".join((
             "R4 거래 원장 (KST, 조회 시각 기준)",
             f"전체 종료 Leg: {_number(closed)}",
-            f"오늘 종료 Leg: {_number(closed_today)}",
+            f"오늘 갱신된 종료 상태 Leg: {_number(closed_today)}",
             f"현재 활성 Leg: {_number(active)}",
             f"누적 진입 주문 의도: {_number(entry_orders)}",
             f"누적 청산 주문 의도: {_number(exit_orders)}",
@@ -254,6 +254,15 @@ def poll_once(token, chat_id, user_id, base=BASE, api=_api):
     """Authenticated polling. Writes only isolated polling cursor, never the trading DB."""
     cursor = base / "state" / "telegram_query_offset.json"
     offset = _offset_load(cursor)
+    if not cursor.exists():
+        # 첫 설치에서 과거 채팅을 오래된 질문으로 재처리하거나 전송하지 않는다.
+        latest = api(token, "getUpdates", {"offset":-1, "limit":1,
+                    "timeout":0, "allowed_updates":'["message"]'})
+        if not isinstance(latest, list):
+            raise RuntimeError("TELEGRAM_BOOTSTRAP_INVALID")
+        ids = [x.get("update_id") for x in latest if isinstance(x,dict) and isinstance(x.get("update_id"),int)]
+        _offset_save(cursor, max(ids)+1 if ids else 0)
+        return 0
     updates = api(token, "getUpdates", {"offset":offset, "limit":10,
                 "timeout":20, "allowed_updates":'["message"]'})
     if not isinstance(updates, list):
