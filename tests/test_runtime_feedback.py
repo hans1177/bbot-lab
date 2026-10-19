@@ -67,7 +67,7 @@ class RuntimeFeedbackTests(unittest.TestCase):
             'schema':'R4_EVALUATION_OBSERVATIONS_V1',
             'updated_at_epoch':stamp,
             'entry_evaluations':[{'instance_id':'SI_0','frame':'12H',
-                                  'symbol':'AXSUSDT','status':'NO_SIGNAL',
+                                  'symbol':'AXSUSDT','status':'ENTRY_GATE_NO_ALLOW',
                                   'evaluated_at_epoch':stamp}],
             'exit_evaluations':[{'instance_id':'SI_0','frame':'12H',
                                  'symbol':'AXSUSDT','side':'SHORT',
@@ -82,7 +82,7 @@ class RuntimeFeedbackTests(unittest.TestCase):
         self.assertEqual(obs['state'],'OBSERVED_FRESH')
         self.assertEqual(len(obs['instances']),6)
         tracked=next(x for x in obs['instances'] if x['instance']=='SI_0')
-        self.assertEqual(tracked['entry_result'],'NO_SIGNAL')
+        self.assertEqual(tracked['entry_result'],'ENTRY_GATE_NO_ALLOW')
         self.assertEqual(tracked['exit_result'],'NO_OPPOSITE')
         self.assertEqual(tracked['exit_legs_observed'],1)
         self.assertTrue(obs['position_evaluations'][0]['fresh'])
