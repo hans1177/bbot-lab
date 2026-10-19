@@ -1278,7 +1278,7 @@ def publish_github_feedback(candidates, received_commit):
             'exit_result':'NOT_OBSERVED','exit_legs_observed':0,
         })
     known={x['instance']:x for x in eval_diag['instances']}
-    statuses={'NO_SIGNAL','SIGNAL_PRESENT','SIGNAL_EVALUATION_ERROR',
+    statuses={'ENTRY_GATE_NO_ALLOW','ENTRY_GATE_ALLOW','SIGNAL_EVALUATION_ERROR',
               'NO_OPPOSITE','OPPOSITE_SIGNAL','OPPOSITE_EXIT_ATTEMPTED',
               'TRAIL_EXIT_ATTEMPTED','MANAGEMENT_ERROR',
               'SKIPPED_UNSETTLED','SKIPPED_PENDING_EXIT','SKIPPED_PRICE',
@@ -1357,6 +1357,17 @@ def publish_github_feedback(candidates, received_commit):
             item['entry_symbols_observed']=0
             item['exit_legs_observed']=0
     diag['evaluations']=eval_diag
+    if eval_diag['state']=='OBSERVED_FRESH':
+        latest=max(
+            [int(x.get('last_entry_evaluation_epoch') or 0) for x in eval_diag['instances']]
+            + [int(x.get('last_exit_evaluation_epoch') or 0) for x in eval_diag['instances']],
+            default=0,
+        )
+        if latest and 0<=stamp-latest<=300:
+            observed('signal','DIRECT_GATE_EVALUATION_OBSERVED',
+                     last_evaluation_epoch=latest,
+                     source='R4_PROCESS_ALLOWLISTED_SNAPSHOT',
+                     coverage_scope='OBSERVED_INSTANCES_ONLY')
     diag_raw=json.dumps(diag,sort_keys=True,allow_nan=False).encode()
     if len(diag_raw)>128*1024:raise RuntimeError('FEEDBACK_DIAGNOSTIC_LIMIT')
     payloads={'HEARTBEAT.json':json.dumps(heartbeat,sort_keys=True).encode(),'MARKET.json':json.dumps(market,sort_keys=True,allow_nan=False).encode(),'CONFIG.json':config_raw,'DIAGNOSTICS.json':diag_raw}
