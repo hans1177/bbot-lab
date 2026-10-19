@@ -1,8 +1,8 @@
 {
   "schema": "B_BOT_RESEARCH_CHECKPOINT_V1",
   "release_contract": "FINAL_GATES_THEN_EXISTING_RUNTIME_WORKER_V1",
-  "source_run_id": "39283000189",
-  "source_commit": "0b4e017bf064b3c843d0bcb0ed9a8620c25554fa",
+  "source_run_id": "39294706327",
+  "source_commit": "53f2d53c7a5c0d4d3adf03b036861afcaa347a5c",
   "engine_sha256": "3c665f886a02757e3b35444b437312385d88790c47c6346e90c64dfc0a5a86ed",
   "input_archives": {
     "start.zip": "ace276261e768dbcb520ebd61208d0425af4e9371028a36449100bfd00971e56",
@@ -9040,6 +9040,10 @@
       "bytes": 453937,
       "sha256": "2063ceafe38ab1cb34be8738476a8e234ecab5308e11a2d441b06788cc259895"
     },
+    "strategy_lab/results/20261019_204203_V3_SAFE_CHANNEL_Z_W56_T0P85_6H_BROAD_V1.json": {
+      "bytes": 454049,
+      "sha256": "8a70515543f214959b15eb2e19a8102685a24cc83ce68e44e7f5be5cce53fa3e"
+    },
     "strategy_lab/results/v3/auto_runtime_release_state.json": {
       "bytes": 156,
       "sha256": "0fc915b1b3306363938a796cf5760d4e6c7f9e96cdcedba0b75508616bdd3f94"
@@ -11446,15 +11450,15 @@
     },
     "strategy_lab/results/v3/historical_314_pipeline_stage2.json": {
       "bytes": 1550957,
-      "sha256": "9c516f16d03e37871c42e953c93fa8cd00ecac17e335d4e391275065d9f36c15"
+      "sha256": "88dd4ea97aafb499361ee75efc9ca912b9d0d000802a634e2cad82a60fb98ab8"
     },
     "strategy_lab/results/v3/individual_reentry_final_risk_stage4.json": {
       "bytes": 960919,
       "sha256": "636301ce7059c659480a523bb2561ea558122d4ab297da5d0d6791b29e76f31e"
     },
     "strategy_lab/results/v3/individual_trailing_stage3.json": {
-      "bytes": 1864104,
-      "sha256": "bec40afc73863430ddaaec88da8f73db8140f7c5c3a7eac85de68eed8caac573"
+      "bytes": 1865200,
+      "sha256": "fac244c1f9ad0282ff5c534159978b1bdb43a185faa99b5bc366b70733e79cd3"
     },
     "strategy_lab/results/v3/redeveloped_strategies/v3_adaptive_channel_rfull_validation_1.py": {
       "bytes": 2954,
@@ -11569,8 +11573,8 @@
       "sha256": "6ece6e693ab33df29002c525968e0b7af603cf2e8e8c70727544bad0a58189e6"
     },
     "strategy_lab/results/v3/roadmap_queue.json": {
-      "bytes": 386055,
-      "sha256": "fa028af818cb1332f5bed0bea36f21d76081f8a21ab43d1536e753d0d5ed53d2"
+      "bytes": 386056,
+      "sha256": "0d0c59c01b9355ec79328fdee57bf2c6b0b75d2b33b7c66285ed5e1bb142b71a"
     },
     "strategy_lab/results/v3/runtime_diagnostics.json": {
       "bytes": 9457,
@@ -11581,9 +11585,53 @@
       "sha256": "582055dc70dc699864fa1fb8b27a1778d6e93f949dfe2c1f2ee9741be298ef47"
     },
     "strategy_lab/results/v3/trial_ledger.json": {
-      "bytes": 1429834,
-      "sha256": "0beb7d820cc45c7b30ab12c016b63655fd201ee2cb65a69fa35179e3f90c8e9a"
+      "bytes": 1430494,
+      "sha256": "6bf0c630235eb733b6e0ec3cbe573e31e75e55da12a7e42a873820f754673607"
     }
   },
-  "archive_sha256": "30e7474a3e068ff6ed588bd3824098dcabd338d9174a41f29662c96ae8f307c1"
+  "p0_stage_status": {
+    "schema": "B_BOT_P0_CHECKPOINT_STAGE_SNAPSHOT_V1",
+    "pipeline_sha256": "88dd4ea97aafb499361ee75efc9ca912b9d0d000802a634e2cad82a60fb98ab8",
+    "aws_final_certification": "NOT_VERIFIED_BY_GITHUB_RESEARCH",
+    "automatic_registration_authorized": false,
+    "leading_exact_version": "EV_55a86e97dfadf81c_30M",
+    "research_full_and_sealed_blind_pass_count": 0,
+    "status": "RESEARCH_STAGE_ONLY",
+    "stage_counts": {
+      "HARD_PASS_RECHECK_FAIL": 21,
+      "INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING": 161,
+      "INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE": 18,
+      "PERSISTENT_FAIL": 8,
+      "REDEVELOPMENT_SUPERSEDED_BY_NEW_VERSION": 63
+    },
+    "leading": {
+      "strategy_id": "V3_EFFICIENCY_PULLBACK_RESUME",
+      "exact_strategy_version": "EV_55a86e97dfadf81c_30M",
+      "timeframe": "30M",
+      "pipeline_stage": "REDEVELOPMENT_SUPERSEDED_BY_NEW_VERSION",
+      "last_error": "",
+      "final_risk_gate": {
+        "evaluated": true,
+        "pass": false,
+        "decision": "FAIL",
+        "reasons": []
+      },
+      "full_validation_gate": {
+        "evaluated": false,
+        "pass": false,
+        "decision": "NOT_EVALUATED",
+        "reasons": []
+      },
+      "sealed_final_blind_gate": {
+        "evaluated": false,
+        "pass": false,
+        "decision": "NOT_EVALUATED",
+        "reasons": []
+      },
+      "redevelopment_cycles_by_gate": {
+        "FINAL_RISK_REVALIDATION": 1
+      }
+    }
+  },
+  "archive_sha256": "7f591b03ffb4a8e616e245b8a67b086882ff56d63706293765c77b5611b17de6"
 }
