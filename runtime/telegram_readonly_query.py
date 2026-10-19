@@ -109,9 +109,10 @@ def _status(base):
 
 
 def _trades(base, now):
-    with closing(_read_db(base)) as con:
-        if con is None:
-            return "거래 원장 조회 불가 (원본 변경 없음)"
+    con = _read_db(base)
+    if con is None:
+        return "거래 원장 조회 불가 (원본 변경 없음)"
+    with closing(con):
         today = datetime.fromtimestamp(now, KST).replace(hour=0, minute=0, second=0, microsecond=0)
         start = int(today.timestamp())
         closed = _count(con, "r4_active_legs", " WHERE status='CLOSED'")
@@ -152,9 +153,10 @@ def _strategies(base):
 
 
 def _risk(base):
-    with closing(_read_db(base)) as con:
-        if con is None:
-            return "위험 원장 조회 불가"
+    con = _read_db(base)
+    if con is None:
+        return "위험 원장 조회 불가"
+    with closing(con):
         mismatches = _count(con, "r4_basket_snapshots", " WHERE mismatch=1")
         incomplete = _count(con, "r4_trade_evidence", " WHERE evidence_complete=0")
         failures = _count(con, "r4_trade_evidence", " WHERE hard_fail=1")
