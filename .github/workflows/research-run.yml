@@ -236,14 +236,61 @@ jobs:
               commit=get('/git/commits/'+head)
               tree=get('/git/trees/'+commit['tree']['sha'])['tree']
               entries={row['path']:row for row in tree}
-              if set(entries)!={'CHECKPOINT.json','checkpoint.zip'}:raise RuntimeError('STATE_TREE_INVALID')
               folder=Path(os.environ['RUNNER_TEMP'])/'research-checkpoint-in';folder.mkdir()
-              for name,row in entries.items():
-                  if row['type']!='blob':raise RuntimeError('STATE_TYPE_INVALID')
+              def read_blob(name, maximum):
+                  row=entries.get(name)
+                  if not isinstance(row,dict) or row.get('type')!='blob' or not isinstance(row.get('size'),int) or not 0<row['size']<=maximum:
+                      raise RuntimeError('STATE_BLOB_DESCRIPTOR_INVALID:'+name)
                   blob=get('/git/blobs/'+row['sha'])
-                  raw=base64.b64decode(blob['content'],validate=False)
-                  if len(raw)!=blob['size']:raise RuntimeError('STATE_BLOB_SIZE')
-                  (folder/name).write_bytes(raw)
+                  if blob.get('encoding')!='base64' or not isinstance(blob.get('content'),str):
+                      raise RuntimeError('STATE_BLOB_ENCODING_INVALID:'+name)
+                  raw=base64.b64decode(blob['content'].replace(chr(10),''),validate=True)
+                  if len(raw)!=blob.get('size') or len(raw)!=row['size']:
+                      raise RuntimeError('STATE_BLOB_SIZE:'+name)
+                  return raw
+              if set(entries)=={'CHECKPOINT.json','checkpoint.zip'}:
+                  # The previous exact archive format is still supported.
+                  (folder/'CHECKPOINT.json').write_bytes(read_blob('CHECKPOINT.json',4*1024**2))
+                  (folder/'checkpoint.zip').write_bytes(read_blob('checkpoint.zip',90*1024**2))
+              else:
+                  if not {'CHECKPOINT.json','checkpoint.parts.json'}.issubset(entries):
+                      raise RuntimeError('STATE_TREE_INVALID')
+                  receipt_raw=read_blob('CHECKPOINT.json',4*1024**2)
+                  receipt=json.loads(receipt_raw)
+                  transport=json.loads(read_blob('checkpoint.parts.json',1024**2))
+                  chunk_bytes=8*1024**2
+                  parts=transport.get('parts')
+                  if (transport.get('schema')!='B_BOT_RESEARCH_CHECKPOINT_PARTS_V1'
+                      or transport.get('chunk_bytes')!=chunk_bytes
+                      or not isinstance(parts,list) or not 1<=len(parts)<=64
+                      or receipt.get('schema')!='B_BOT_RESEARCH_CHECKPOINT_V1'
+                      or receipt.get('archive_sha256')!=transport.get('archive_sha256')):
+                      raise RuntimeError('STATE_PARTS_MANIFEST_INVALID')
+                  expected={'CHECKPOINT.json','checkpoint.parts.json'}
+                  total=0
+                  for index,row in enumerate(parts):
+                      name=f'checkpoint.part{index:04d}'
+                      if (not isinstance(row,dict) or set(row)!={'name','bytes','sha256'}
+                          or row.get('name')!=name or not isinstance(row.get('bytes'),int)
+                          or not 0<row['bytes']<=chunk_bytes
+                          or (index<len(parts)-1 and row['bytes']!=chunk_bytes)
+                          or not isinstance(row.get('sha256'),str) or len(row['sha256'])!=64
+                          or any(c not in '0123456789abcdef' for c in row['sha256'])):
+                          raise RuntimeError('STATE_PART_DESCRIPTOR_INVALID')
+                      total+=row['bytes'];expected.add(name)
+                  if (set(entries)!=expected or transport.get('archive_bytes')!=total
+                      or not 0<total<=512*1024**2):
+                      raise RuntimeError('STATE_PART_SET_INVALID')
+                  digest=hashlib.sha256()
+                  (folder/'CHECKPOINT.json').write_bytes(receipt_raw)
+                  with (folder/'checkpoint.zip').open('wb') as target:
+                      for row in parts:
+                          raw=read_blob(row['name'],chunk_bytes)
+                          if len(raw)!=row['bytes'] or hashlib.sha256(raw).hexdigest()!=row['sha256']:
+                              raise RuntimeError('STATE_PART_HASH_MISMATCH')
+                          digest.update(raw);target.write(raw)
+                  if digest.hexdigest()!=transport['archive_sha256']:
+                      raise RuntimeError('STATE_ARCHIVE_HASH_MISMATCH')
               print('PRIVATE_GIT_CHECKPOINT_DOWNLOADED',head)
           (Path(os.environ['RUNNER_TEMP'])/'research-state-head.json').write_text(json.dumps({'head':head}))
       - name: Restore exact research state
