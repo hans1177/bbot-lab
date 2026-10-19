@@ -89,11 +89,12 @@ def certification_progress(root, manifest_path):
         "schema": "B_BOT_P0_CERTIFICATION_PROGRESS_V1",
         "objective": "FIRST_END_TO_END_FINAL_PASS",
         "research_run_success_not_certification": True,
-        "final_certified_count": 0,
+        "aws_final_certification": "NOT_VERIFIED_BY_GITHUB_RESEARCH",
         "research_full_and_sealed_blind_pass_count": len(final_gates),
         "research_full_and_sealed_blind_pass": final_gates[:8],
         "unverified_shadow_stage_count": len(invalid_shadow),
         "stage_counts": dict(sorted(counts.items())),
+        "pipeline_entries_seen": len(entries),
         "closest_trailing": sorted(nearest,
               key=lambda r: (-r["fine_measured"], r["fine_planned"], r["version"]))[:5],
         "handoff_awaiting_server_validation_count": len(handoff),
@@ -119,7 +120,7 @@ def main():
         lines = [
             "### P0 — 첫 최종 인증 전략",
             "",
-            "**완전 인증 완료: 0건 (GitHub 연구실 단독으로 AWS 인증을 확정하지 않음)**",
+            "**완전 인증: GitHub 연구실 단독으로 확정 불가 (AWS 별도 검증 필요)**",
             "",
             "- 연구 전체 검증 + 봉인 블라인드 통과: " +
                 str(report["research_full_and_sealed_blind_pass_count"]),
