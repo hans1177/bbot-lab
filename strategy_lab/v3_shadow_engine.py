@@ -1556,6 +1556,29 @@ def _bundle_version_from_snapshot(snapshot):
     raw=json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(",",":"),default=str).encode("utf-8")
     return "PB_" + hashlib.sha256(raw).hexdigest()[:32]
 
+def _policy_behavior_from_snapshot(snapshot):
+    """Decode known immutable R4 policy schemas without changing the payload.
+
+    Historical migration instances keep trailing/reentry at the top level.
+    Provisional strategy instances use {policy_versions, behavior_policy}.
+    Unknown or malformed mixed shapes fail closed; do not normalize hashes.
+    """
+    if not isinstance(snapshot, dict):
+        return {}
+    if "behavior_policy" in snapshot:
+        if any(key in snapshot for key in ("trailing", "state_reentry")):
+            return {}
+        value = snapshot["behavior_policy"]
+        return value if isinstance(value, dict) else {}
+    if (
+        isinstance(snapshot.get("trailing"), dict)
+        and isinstance(snapshot.get("state_reentry"), dict)
+        and isinstance(snapshot.get("policy_versions"), dict)
+    ):
+        return snapshot
+    return {}
+
+
 def _legacy_frozen_baseline_policy_pass(registry, instance, snapshot, request, trailing, state_reentry):
     """Validate an existing CANARY's *frozen* baseline contract, never a new trial.
 
@@ -1624,7 +1647,7 @@ def _legacy_frozen_baseline_policy_pass(registry, instance, snapshot, request, t
         return False
 
     cfg = load_json(ROOT / "strategy_config.json", {})
-    behavior = snapshot.get("behavior_policy") or {}
+    behavior = _policy_behavior_from_snapshot(snapshot)
     if (not isinstance(cfg, dict) or not isinstance(behavior, dict)
         or not isinstance(trailing, dict) or not isinstance(state_reentry, dict)
         or not trailing or not state_reentry
@@ -1670,7 +1693,7 @@ def _strategy_instance_policy_snapshot_check(frame_state,request):
         errors.append("POLICY_BUNDLE_HASH_MISMATCH")
 
     versions=snapshot.get("policy_versions") if isinstance(snapshot.get("policy_versions"),dict) else {}
-    behavior=snapshot.get("behavior_policy") if isinstance(snapshot.get("behavior_policy"),dict) else {}
+    behavior=_policy_behavior_from_snapshot(snapshot)
     trailing=behavior.get("trailing") if isinstance(behavior.get("trailing"),dict) else {}
     state_reentry=behavior.get("state_reentry") if isinstance(behavior.get("state_reentry"),dict) else {}
     research=req.get("research_evidence") if isinstance(req.get("research_evidence"),dict) else {}
