@@ -556,22 +556,76 @@ def _new_research_available():
             if combination_research.hypotheses(tf): return True
         except Exception:
             continue
-    search = config().get("candidate_search") or {}
-    if search.get("enabled") is True:
-        contract = search.get("contract") or {}
-        tf = str(contract.get("timeframe") or "").upper()
-        knowledge_state, _ = knowledge.ensure()
-        checkpoint = (knowledge_state.get("records") or {}).get("candidate_search_wave:" + tf) or {}
-        if checkpoint.get("run_id") != contract.get("run_id"):
-            return True
-        import v3_memory_hypothesis_wave as candidate_wave
-        manifest = candidate_wave.wave(tf, search_contract=contract)
-        done = hypothesis_factory.completed_pairs()
-        return any((str(row.get("name") or "").upper(), tf) not in done for row in manifest.get("candidates") or [])
+    return _search_candidate_available()
+
+
+
+def _search_contracts():
+    # Research-only settings never modify the server strategy configuration.
+    search=load(LAB/'lab_config.json',{}).get('candidate_search')
+    if search is None:search=config().get('candidate_search') or {}
+    if search.get('enabled') is not True:return []
+    contracts=search.get('contracts') or [search.get('contract') or {}]
+    if not 1<=len(contracts)<=3:raise ValueError('SEARCH_CONTRACT_COUNT_INVALID')
+    frames=[str(c.get('timeframe') or '').upper() for c in contracts]
+    if len(set(frames))!=len(frames):raise ValueError('SEARCH_TIMEFRAME_DUPLICATE')
+    return contracts
+
+
+def _search_candidate_available():
+    contracts=_search_contracts()
+    if not contracts:return False
+    state,_=knowledge.ensure();done=hypothesis_factory.completed_pairs()
+    import v3_memory_hypothesis_wave as candidate_wave
+    for contract in contracts:
+        tf=str(contract.get('timeframe') or '').upper()
+        saved=(state.get('records') or {}).get('candidate_search_wave:'+tf) or {}
+        if saved.get('run_id')!=contract.get('run_id'):return True
+        manifest=candidate_wave.wave(tf,search_contract=contract)
+        if any((str(r['name']).upper(),tf) not in done for r in manifest['candidates']):return True
     return False
 
 
+def _run_search_candidate_one():
+    import v3_memory_hypothesis_wave as candidate_wave
+    contracts=_search_contracts()
+    if not contracts:return None
+    state,_=knowledge.ensure()
+    cursor=int(((state.get('records') or {}).get('candidate_search_rotation') or {}).get('cursor',0))
+    done=hypothesis_factory.completed_pairs()
+    for offset in range(len(contracts)):
+        index=(cursor+offset)%len(contracts);contract=contracts[index]
+        tf=str(contract.get('timeframe') or '').upper()
+        manifest=candidate_wave.wave(tf,search_contract=contract)
+        pending=[r for r in manifest['candidates'] if (str(r['name']).upper(),tf) not in done]
+        if not pending:continue
+        row=hypothesis_factory.run_one(candidate=pending[0])
+        _record_strategy_track('AUTO_MANAGER_GENETIC_OPTUNA_FIXED_WINDOW',row)
+        knowledge.record_result('candidate_search_rotation',{'cursor':(index+1)%len(contracts)})
+        return {'status':'DONE','action':'SEALED_SEARCH_CANDIDATE_RESEARCH','result':row,
+                'wave_id':manifest['wave_id'],'timeframe':tf,'automatic_promotion':False}
+    return None
+
+
 def _run_new_research_one(held):
+    # A fixed turn every four new-research dispatches avoids starvation; no
+    # reward-driven reallocation and no change to downstream bucket weights.
+    state,_=knowledge.ensure()
+    cursor=int(((state.get('records') or {}).get('new_research_rotation') or {}).get('cursor',0))
+    if cursor%4==0 and _search_candidate_available():
+        result=_run_search_candidate_one()
+        if result is not None:
+            knowledge.record_result('new_research_rotation',{'cursor':cursor+1})
+            return result
+    result=_run_basic_research_one(held)
+    if result.get('status')=='NO_NEW_RESEARCH_BACKLOG':
+        result=_run_search_candidate_one() or result
+    if result.get('status')!='NO_NEW_RESEARCH_BACKLOG':
+        knowledge.record_result('new_research_rotation',{'cursor':cursor+1})
+    return result
+
+
+def _run_basic_research_one(held):
     workers=int(load(LAB/'lab_config.json',{}).get('research_compute_workers',1))
     if workers==3:
         batch=_run_frame_batch()
@@ -588,19 +642,6 @@ def _run_new_research_one(held):
         tf=None
     if tf:
         row=combination_research.run_one(tf); _record_strategy_track("AUTO_MANAGER_COMBINATION_FIXED_WINDOW",row if isinstance(row,dict) else {"status":"MEASURED"}); return {"status":"DONE","action":"COMBINATION_RESEARCH","timeframe":tf,"result":row}
-    search = config().get("candidate_search") or {}
-    if search.get("enabled") is True:
-        import v3_memory_hypothesis_wave as candidate_wave
-        contract = search.get("contract") or {}
-        tf = str(contract.get("timeframe") or "").upper()
-        manifest = candidate_wave.wave(tf, search_contract=contract)
-        done = hypothesis_factory.completed_pairs()
-        pending = [row for row in manifest["candidates"] if (str(row["name"]).upper(), tf) not in done]
-        if pending:
-            row = hypothesis_factory.run_one(candidate=pending[0])
-            _record_strategy_track("AUTO_MANAGER_GENETIC_OPTUNA_FIXED_WINDOW", row)
-            return {"status": "DONE", "action": "SEALED_SEARCH_CANDIDATE_RESEARCH", "result": row,
-                    "wave_id": manifest["wave_id"], "automatic_promotion": False}
     return {"status":"NO_NEW_RESEARCH_BACKLOG"}
 
 

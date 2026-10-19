@@ -901,3 +901,40 @@ if __name__ == "__main__":
     print(
         "SERVER_RELEASE=NO"
     )
+
+
+def prepare_cloud_training_pilot():
+    """Fixed, finite training-only proposals; never edit runtime configuration."""
+    import run_strategy
+    import pandas as pd
+    lab=run_strategy.load_lab_engine()
+    cfg_path=hf.ROOT/'strategy_lab/lab_config.json'
+    cfg=json.loads(cfg_path.read_text(encoding='utf-8-sig'))
+    contracts=[]
+    start='2020-01-01T00:00:00Z';end='2021-12-31T23:59:59Z'
+    for tf in ('1H','6H','12H'):
+        if tf not in hf.TF_ORDER:raise ValueError('PILOT_TIMEFRAME_OUTSIDE_RESEARCH_SCOPE')
+        files=[]
+        for symbol in ('BTCUSDT','ETHUSDT'):
+            raw=run_strategy.load_raw_frame(lab,symbol,tf)
+            data=raw.loc[(raw.ts>=pd.Timestamp(start).timestamp()) & (raw.ts<=pd.Timestamp(end).timestamp()),
+                         ['ts','open','high','low','close','volume']].copy()
+            if len(data)<500:raise ValueError('PILOT_TRAINING_SAMPLE_INSUFFICIENT')
+            path=hf.ROOT/'data/candles/research_training'/f'ga_pilot_20261019_{symbol}_{tf}.csv'
+            path.parent.mkdir(parents=True,exist_ok=True)
+            raw_bytes=data.to_csv(index=False,float_format='%.17g',lineterminator='\n').encode()
+            path.write_bytes(raw_bytes)
+            files.append({'role':'TRAINING_ONLY','timeframe':tf,'symbol':symbol,
+                          'path':path.relative_to(hf.ROOT).as_posix(),'sha256':hashlib.sha256(raw_bytes).hexdigest()})
+        contracts.append({'schema':'B_BOT_CANDIDATE_SEARCH_V1','timeframe':tf,
+            'run_id':'ga_pilot_20261019_'+tf,'seed':17,'population_size':8,'generations':2,
+            'optuna_trials':12,'max_evaluations':32,'max_seconds':300,
+            'fee_rate':float(cfg.get('fee_rate',0.0005)),
+            'training_start_utc':start,'training_end_utc':end,
+            'oos_start_utc':'2022-01-08T00:00:00Z','sealed_start_utc':'2024-08-28T00:00:00Z',
+            'training_files':files})
+    cfg['candidate_search']={'enabled':True,'contracts':contracts,'automatic_wave_refresh':False}
+    hf.knowledge.atomic(cfg_path,cfg)
+    return {'status':'TRAINING_ONLY_PILOT_PREPARED','timeframes':[c['timeframe'] for c in contracts],
+            'max_evaluations_per_frame':32,'max_candidates_per_frame':WAVE_SIZE_PER_TF,
+            'runtime_config_modified':False,'official_validation_executed':False}

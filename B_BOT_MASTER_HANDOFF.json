@@ -6006,7 +6006,7 @@
     "strategy_lab/v3_strategy_research.py": "STRATEGY_RESEARCH_AND_MAIN_SELECTION",
     "verify_green7a_execution_telemetry_processor.py": "GREEN7A_EXECUTION_TELEMETRY_PROCESSOR_VERIFIER"
   },
-  "generated_at": "2026-10-19T02:00:08.210481+00:00",
+  "generated_at": "2026-10-19T02:19:26.223905+00:00",
   "identity": {
     "direct_entry_timeframes": [
       "1H",
@@ -6215,7 +6215,7 @@
   "purpose": "SINGLE_AI_HANDOFF_AND_BBOT_MANUAL",
   "research_development": {
     "evidence_boundary": "DEVELOPMENT_STATUS_ONLY_NOT_LIVE_OR_RELEASE_EVIDENCE",
-    "sha256": "1b5942331437fec871fb45b1e5d943a04864a5915034c2c8c7678abbcb9b44d7",
+    "sha256": "021c2bc583a69ac8d5b36679395373c3972e904399cd6bb153f7acfbd95c07ca",
     "source": "strategy_lab/research_development_state.json",
     "state": {
       "authorized_scope": [
@@ -6241,7 +6241,8 @@
         "Saved grammar task training-window restoration fixed in 08fa0b4af67a9ed816ca2f23a288a857d51cfbee; regression added; 220 local tests passed.",
         "Follow-up engineering run 39187460344 passed 220 tests and six canonical verifiers; all 37 runtime files unchanged.",
         "Follow-up research 39187460325 SUCCESS: eight cycles, three distinct-frame batches (nine computations), checkpoint reuse and intermediate/final saves, final export zero.",
-        "Latest AWS feedback received e1c647d89ef1c34a5a7f863b9492f5bef11cf898 at 2026-10-19 10:59 KST with a fresh heartbeat and unchanged CONFIG hash."
+        "Latest AWS feedback received e1c647d89ef1c34a5a7f863b9492f5bef11cf898 at 2026-10-19 10:59 KST with a fresh heartbeat and unchanged CONFIG hash.",
+        "224 local tests passed after adding a fixed one-in-four new-research turn for bounded GA/Optuna candidates; basic three-frame batches and downstream bucket weights retained."
       ],
       "continuation_rules": [
         "Fetch latest main and research-speed; preserve other changes",
@@ -6251,8 +6252,30 @@
         "Intermediate saves protect completed cycles. A hard kill can still lose work since the last successful remote save; do not claim zero-loss recovery."
       ],
       "future_full_frame_parallelism": "Not yet measured. Keep final/blind stages and state writes serialized; evaluate resources before raising compute concurrency.",
+      "genetic_pilot": {
+        "allocation": "one of four NEW_PURE_AND_HARD_PASS dispatches; persist frame rotation; completed candidates skipped",
+        "automatic_wave_refresh": false,
+        "candidates_per_frame_max": 12,
+        "proposal_evaluations_per_frame_max": 32,
+        "runtime_configuration_changed": false,
+        "scope": "Finite training-only GA and Optuna proposal pilot, not final validation or full meta-learning. Official hard-pass and all downstream gates remain required.",
+        "status": "PENDING_REMOTE_VERIFICATION",
+        "timeframes": [
+          "1H",
+          "6H",
+          "12H"
+        ],
+        "training_symbols": [
+          "BTCUSDT",
+          "ETHUSDT"
+        ],
+        "training_window": [
+          "2020-01-01",
+          "2021-12-31"
+        ]
+      },
       "inspection_findings": {
-        "candidate_search": "Existing GA/Optuna path is conditional on strategy_config.candidate_search.enabled and a sealed training-only contract; fetched server config has no candidate_search key. Do not claim enabled continuous genetic/meta research from code availability alone.",
+        "candidate_search": "Research-only lab config now prepares fixed training slices using official confirmed-bar loader; controller schedules finite GA/Optuna candidates without changing server strategy_config. Actual runtime pending.",
         "checkpoint_cost": "Archive plus receipt are uploaded, not one API call per result file. Measure total archive size/time during sustained runs before changing storage.",
         "policy_and_engine": "Current main Git blob identities verified unchanged: constitution 7e5004331c7110d9c304aea8271e06b75ad821b3; engine f378b90aca138284aa5ae6366a8b3dd0ad107675.",
         "server_diagnosis": "Feedback currently contains CONFIG, HEARTBEAT and MARKET only. Per-strategy rejection or lock execution evidence is not present; do not infer execution defects from frame settings or alter locks.",
@@ -6260,7 +6283,7 @@
       },
       "pending": [
         "Observe long scheduled run and trailing/reentry/full/blind stage progress; do not infer profitability from execution success.",
-        "Genetic/meta queue allocation and new exit/reentry parity work remain outstanding.",
+        "Verify bounded GA/Optuna pilot runtime, sealed-wave resume and AWS receipt; new exit/reentry parity and broader meta research remain outstanding.",
         "Review server-rejected/trading-locked strategies from actual evidence without modifying orders, tiers or leverage.",
         "Full six-frame compute concurrency is not enabled; measure RAM, CPU and bottlenecks before raising cap."
       ],
@@ -6299,7 +6322,7 @@
       },
       "schema": "B_BOT_RESEARCH_DEVELOPMENT_STATE_V1",
       "secondary_goal": "Analyze rejected or trading-locked server strategies: diagnose execution defects first, revise strategy only where necessary, revalidate all gates, resupply through existing receiver; do not manually unlock trading.",
-      "status": "THREE_FRAME_IMPLEMENTED_AND_REMOTE_VERIFIED",
+      "status": "BOUNDED_GENETIC_ALLOCATION_IMPLEMENTED_PENDING_REMOTE_VERIFICATION",
       "updated_at": "2026-10-19",
       "verified_runs": {
         "candidate_commit": "e1c647d89ef1c34a5a7f863b9492f5bef11cf898",
@@ -7557,7 +7580,7 @@
       "size_bytes": null
     }
   },
-  "snapshot_hash": "2aebc4d584491837d50f8176834483ff7bf6cfe87457d689f154ac1cb74e8205",
+  "snapshot_hash": "92f74a6b3dfd251f36c51f6a2409fa3944da5dcc30a51a8e7647c30b7c9db9cf",
   "source_ledgers": {
     "candidate_registry": {
       "exists": false,

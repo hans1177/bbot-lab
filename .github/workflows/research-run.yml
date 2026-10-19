@@ -279,6 +279,14 @@ jobs:
               print('CHECKPOINT_RESTORED',receipt['source_run_id'])
           else:
               print('FRESH_RESEARCH_NO_LOCAL_QUEUE_IMPORTED')
+      - name: Prepare bounded training-only research pilot
+        shell: python
+        run: |
+          import os,sys,json
+          from pathlib import Path
+          sys.path.insert(0,str(Path(os.environ['BBOT_LOCAL_ROOT'])/'strategy_lab'))
+          from v3_memory_hypothesis_wave import prepare_cloud_training_pilot
+          print(json.dumps(prepare_cloud_training_pilot()))
       - name: Existing controller preparation check
         run: |
           python "$BBOT_LOCAL_ROOT/strategy_lab/research_controller.py" --mode managed-dry-run --skip-server-health > "$RUNNER_TEMP/research-preflight.json"
