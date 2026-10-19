@@ -89,6 +89,17 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn('skip_hash_check',remote)
         self.assertIn("if service()!=before_pid",remote)
 
+    def test_current_live_diagnostics_version_can_upgrade_without_bypassing_guard(self):
+        source=(ROOT/'strategy_lab/v3_auto_runtime_release.py').read_text()
+        tree=ast.parse(source)
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='install_server_receiver')
+        remote=next(n.value for n in ast.walk(fn) if isinstance(n,ast.Constant) and isinstance(n.value,str) and 'before_pid=service()' in n.value)
+        digest='ce1737ab108d75faeca807a2602e909e7d4c7d99422df0fcc4b2e73e6c2131c6'
+        self.assertIn("'installed_diagnostics_sha256':"+repr(digest),source)
+        self.assertIn("payload['installed_diagnostics_sha256']",remote)
+        self.assertIn("AWS_RUNTIME_SOURCE_CHANGED",remote)
+        self.assertIn("if old_sha not in {",remote)
+
     def test_receiver_refresh_preserves_live_modes_and_rejects_unrelated_settings(self):
         source=(ROOT/'strategy_lab/v3_auto_runtime_release.py').read_text()
         tree=ast.parse(source)
