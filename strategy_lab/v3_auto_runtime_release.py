@@ -1261,7 +1261,7 @@ def pull(label, research_only=False, runtime_feedback=False):
         if not re.fullmatch('[0-9a-f]{40}',head):raise RuntimeError('FEEDBACK_REF_INVALID')
         tree=api('/git/trees/'+head+'?recursive=1')
         names={row['path']:row for row in tree.get('tree') or []}
-        if tree.get('truncated') or set(names)!={'CONFIG.json','MARKET.json','HEARTBEAT.json','MANIFEST.json'} or any(row.get('type')!='blob' or row.get('mode')!='100644' for row in names.values()):raise RuntimeError('FEEDBACK_TREE_INVALID')
+        if tree.get('truncated') or set(names) not in ({'CONFIG.json','MARKET.json','HEARTBEAT.json','MANIFEST.json'},{'CONFIG.json','MARKET.json','HEARTBEAT.json','DIAGNOSTICS.json','MANIFEST.json'}) or any(row.get('type')!='blob' or row.get('mode')!='100644' for row in names.values()):raise RuntimeError('FEEDBACK_TREE_INVALID')
         def blob(name,limit):
             row=names[name]
             if not 0<=int(row.get('size',-1))<=limit:raise RuntimeError('FEEDBACK_BLOB_LIMIT')
@@ -1269,11 +1269,11 @@ def pull(label, research_only=False, runtime_feedback=False):
             if value.get('encoding')!='base64' or len(raw)!=row['size']:raise RuntimeError('FEEDBACK_BLOB_INVALID')
             return raw
         manifest=json.loads(blob('MANIFEST.json',64*1024));files=manifest.get('files') or {}
-        if manifest.get('schema')!='B_BOT_GITHUB_RUNTIME_FEEDBACK_V1' or set(files)!={'CONFIG.json','MARKET.json','HEARTBEAT.json'}:raise RuntimeError('FEEDBACK_SCHEMA_INVALID')
+        if manifest.get('schema')!='B_BOT_GITHUB_RUNTIME_FEEDBACK_V1' or set(files) not in ({'CONFIG.json','MARKET.json','HEARTBEAT.json'},{'CONFIG.json','MARKET.json','HEARTBEAT.json','DIAGNOSTICS.json'}) or set(names)!=set(files)|{'MANIFEST.json'}:raise RuntimeError('FEEDBACK_SCHEMA_INVALID')
         if not 0<=time.time()-float(manifest.get('created_at_epoch') or 0)<=180:return {'status':'WAIT_FRESH_SERVER_FEEDBACK'}
         current=api('/git/ref/heads/runtime-candidates')['object']['sha']
         if manifest.get('received_commit')!=current:return {'status':'WAIT_SERVER_CANDIDATE_RECEIPT'}
-        raw_files={name:blob(name,8*1024**2 if name=='MARKET.json' else 1024**2) for name in files}
+        raw_files={name:blob(name,8*1024**2 if name=='MARKET.json' else 128*1024 if name=='DIAGNOSTICS.json' else 1024**2) for name in files}
         for name,raw in raw_files.items():
             if len(raw)!=files[name].get('bytes') or hashlib.sha256(raw).hexdigest()!=files[name].get('sha256'):raise RuntimeError('FEEDBACK_HASH_MISMATCH:'+name)
         config=json.loads(raw_files['CONFIG.json']);heartbeat=json.loads(raw_files['HEARTBEAT.json']);market=json.loads(raw_files['MARKET.json'])
@@ -1285,6 +1285,20 @@ def pull(label, research_only=False, runtime_feedback=False):
             elif isinstance(value,list):
                 for item in value:credentials(item)
         credentials(config)
+        diagnostics=None
+        if 'DIAGNOSTICS.json' in raw_files:
+            diagnostics=json.loads(raw_files['DIAGNOSTICS.json'])
+            if (not isinstance(diagnostics,dict) or diagnostics.get('schema')!='B_BOT_RUNTIME_DIAGNOSTICS_V1'
+                or abs(float(diagnostics.get('created_at_epoch') or 0)-float(manifest['created_at_epoch']))>30
+                or not isinstance(diagnostics.get('modules'),dict)
+                or not isinstance(diagnostics.get('ledger'),dict)
+                or not isinstance(diagnostics.get('errors'),dict)):raise RuntimeError('FEEDBACK_DIAGNOSTICS_INVALID')
+            allowed={'collector','market','runtime','websocket','signal','risk','order','entry_fill','exit','exit_fill','recovery','storage','tier'}
+            if set(diagnostics['modules'])-allowed:raise RuntimeError('FEEDBACK_DIAGNOSTIC_STAGE_INVALID')
+            for stage,row in diagnostics['modules'].items():
+                if (not isinstance(row,dict) or not isinstance(row.get('state'),str)
+                    or not re.fullmatch(r'[A-Z_]{1,48}',row['state'])):raise RuntimeError('FEEDBACK_DIAGNOSTIC_STATE_INVALID:'+stage)
+            credentials(diagnostics)
         if heartbeat.get('schema')!='B_BOT_V3_COLLECTOR_HEARTBEAT_V1' or not 0<=time.time()-float(heartbeat.get('updated_at_epoch') or 0)<=180:return {'status':'WAIT_SERVER_COLLECTOR'}
         seconds={'30M':1800,'1H':3600,'6H':21600,'12H':43200,'1D':86400,'1W':604800};bars=market.get('bars') or {}
         if market.get('schema')!='B_BOT_PUBLIC_CLOSED_BARS_V1' or market.get('columns')!=['open_time_ms','open','high','low','close','volume'] or not 1<=len(bars)<=35:raise RuntimeError('FEEDBACK_MARKET_INVALID')
@@ -1307,6 +1321,9 @@ def pull(label, research_only=False, runtime_feedback=False):
                 target=ROOT/'data/candles'/symbol/(frame.lower()+'.parquet');target.parent.mkdir(parents=True,exist_ok=True);os.replace(stage/(str(index)+'.parquet'),target)
             for name,target in [('CONFIG.json',ROOT/'strategy_config.json'),('HEARTBEAT.json',RESULTS/'collector_heartbeat.json')]:
                 target.parent.mkdir(parents=True,exist_ok=True);temporary=stage/name;temporary.write_bytes(raw_files[name]);os.replace(temporary,target)
+            if diagnostics is not None:
+                output=RESULTS/'runtime_diagnostics.json';output.parent.mkdir(parents=True,exist_ok=True)
+                temporary=stage/'DIAGNOSTICS.json';temporary.write_bytes(raw_files['DIAGNOSTICS.json']);os.replace(temporary,output)
         import v3_collector_required_universe
         v3_collector_required_universe.main()
         result={'status':'SERVER_FEEDBACK_IMPORTED','received_commit':head,'config_sha256':files['CONFIG.json']['sha256'],'market_sha256':files['MARKET.json']['sha256'],'source_heartbeat_epoch':heartbeat['updated_at_epoch'],'symbols':sorted(bars),'timeframes':sorted({frame for items in bars.values() for frame in items}),'server_write':False,'orders_touched':False}
