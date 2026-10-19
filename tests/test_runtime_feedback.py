@@ -1,5 +1,5 @@
 # 파일명: tests/test_runtime_feedback.py
-import ast,hashlib,json,subprocess,tempfile,time,types,unittest
+import ast,hashlib,json,sqlite3,subprocess,tempfile,time,types,unittest
 from pathlib import Path
 from unittest.mock import patch
 import pandas as pd
@@ -54,7 +54,63 @@ class RuntimeFeedbackTests(unittest.TestCase):
         with patch.object(pd,'read_parquet',side_effect=AssertionError('must reuse bounded cache')):self.call()
         self.assertEqual(self.payload('MANIFEST.json')['files']['MARKET.json']['sha256'],market);self.assertEqual(log.read_bytes(),before)
     def test_config_and_market_are_separate_content_addressed_blobs(self):
-        self.call();manifest=self.payload('MANIFEST.json');self.assertEqual(set(manifest['files']),{'CONFIG.json','MARKET.json','HEARTBEAT.json'});self.assertFalse(manifest['orders_touched']);self.assertFalse(manifest['database_opened'])
+        self.call();manifest=self.payload('MANIFEST.json');self.assertEqual(set(manifest['files']),{'CONFIG.json','MARKET.json','HEARTBEAT.json','DIAGNOSTICS.json'});self.assertFalse(manifest['orders_touched']);self.assertFalse(manifest['database_opened']);self.assertTrue(manifest['database_read_only']);self.assertEqual(self.payload('DIAGNOSTICS.json')['modules']['collector']['state'],'HEARTBEAT_FRESH')
+    def test_diagnostics_summarizes_order_exit_fill_recovery_and_storage_read_only(self):
+        db=self.state/'history.db'
+        with sqlite3.connect(db) as con:
+            con.executescript("""
+                CREATE TABLE r4_order_intents(id INTEGER PRIMARY KEY,status TEXT,updated_ts INTEGER);
+                CREATE TABLE r4_exit_intents(id INTEGER PRIMARY KEY,status TEXT,updated_ts INTEGER);
+                CREATE TABLE r4_fills(id INTEGER PRIMARY KEY,ts INTEGER);
+                CREATE TABLE r4_leg_events(id INTEGER PRIMARY KEY,event_type TEXT,ts INTEGER);
+                CREATE TABLE r4_trade_evidence(id INTEGER PRIMARY KEY,kind TEXT,evidence_complete INTEGER,hard_fail INTEGER,ts INTEGER);
+                CREATE TABLE r4_reconciliation_events(id INTEGER PRIMARY KEY,result TEXT,ts INTEGER);
+                CREATE TABLE r4_hard_safety_events(id INTEGER PRIMARY KEY,action TEXT,ts INTEGER);
+                CREATE TABLE r4_basket_snapshots(mismatch INTEGER);
+                INSERT INTO r4_order_intents VALUES(1,'AMBIGUOUS',100);
+                INSERT INTO r4_exit_intents VALUES(1,'PARTIAL_FILLED',101);
+                INSERT INTO r4_fills VALUES(1,102);
+                INSERT INTO r4_leg_events VALUES(1,'EXIT_FILL',103);
+                INSERT INTO r4_trade_evidence VALUES(1,'EXIT_FILL',0,1,104);
+                INSERT INTO r4_reconciliation_events VALUES(1,'MISMATCH',105);
+                INSERT INTO r4_hard_safety_events VALUES(1,'HARD_BLOCK',106);
+                INSERT INTO r4_basket_snapshots VALUES(1);
+            """)
+        original=db.read_bytes()
+        self.call()
+        diag=self.payload('DIAGNOSTICS.json')
+        self.assertEqual(diag['ledger']['state'],'READ_ONLY_OK')
+        self.assertEqual(diag['modules']['order']['state'],'EVIDENCE_PRESENT')
+        self.assertEqual(diag['ledger']['recent']['order']['by_type']['AMBIGUOUS'],1)
+        self.assertEqual(diag['ledger']['recent']['exit']['by_type']['PARTIAL_FILLED'],1)
+        self.assertEqual(diag['ledger']['recent']['entry_fill']['by_type']['RECORDED'],1)
+        self.assertEqual(diag['ledger']['recent']['exit_fill']['by_type']['EXIT_FILL'],1)
+        self.assertEqual(diag['ledger']['mismatched_baskets']['mismatch'],1)
+        self.assertEqual(diag['ledger']['proofs']['incomplete'],1)
+        self.assertEqual(diag['ledger']['proofs']['hard_fail'],1)
+        self.assertEqual(diag['modules']['storage']['state'],'HARD_FAIL_EVIDENCE')
+        self.assertEqual(db.read_bytes(),original)
+        raw=json.dumps(diag)
+        self.assertNotIn('client_order_id',raw)
+        self.assertNotIn('API_KEY',raw)
+    def test_missing_or_invalid_database_is_not_misreported_healthy(self):
+        db=self.state/'history.db'
+        self.call()
+        self.assertEqual(self.payload('DIAGNOSTICS.json')['ledger']['state'],'MISSING')
+        db.write_bytes(b'INVALID_SQLITE_BYTES')
+        self.call()
+        diag=self.payload('DIAGNOSTICS.json')
+        self.assertEqual(diag['ledger']['state'],'UNAVAILABLE')
+        self.assertEqual(diag['modules']['storage']['state'],'DATABASE_READ_FAILED')
+    def test_log_diagnostics_uploads_allowlisted_tags_only(self):
+        logfile=self.root/'logs/runner.log';logfile.parent.mkdir(exist_ok=True)
+        logfile.write_text('[ERROR] [주문][R4][WS_KEEPALIVE_FAIL] sensitive=DoNotExport\n[주문][R4][ORDER_FAIL] key=private\n')
+        self.call()
+        diag=self.payload('DIAGNOSTICS.json')
+        self.assertEqual(diag['errors']['tags']['WS_KEEPALIVE_FAIL'],1)
+        self.assertEqual(diag['errors']['tags']['ORDER_FAIL'],1)
+        self.assertNotIn('DoNotExport',json.dumps(diag))
+        self.assertNotIn('private',json.dumps(diag))
 class FeedbackKeyTests(unittest.TestCase):
     def test_only_explicit_feedback_setup_registers_public_write_key(self):
         import base64
