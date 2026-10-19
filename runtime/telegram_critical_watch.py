@@ -215,6 +215,11 @@ def _env_file(path):
 
 
 def _telegram_credentials(base):
+    # Prefer precisely the destination used by the existing 5-minute report.
+    # Do not fall back to another bot silently if this reporter is installed.
+    if (base / "reservation.py").is_file() or (base / "reservation.py").is_symlink():
+        from telegram_reservation_bridge import reservation_credentials
+        return reservation_credentials(base)
     settings = {}
     for path in (Path("/etc/bbot/runner.env"), base / ".env"):
         settings.update(_env_file(path))
