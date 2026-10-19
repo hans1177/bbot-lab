@@ -119,6 +119,88 @@ class ExecutionEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'CANNOT_BE_ADDED_AFTER_FILL'):
             self.ledger.confirm_leverage_for_leg(self.intent['leg_id'],30,30,'BINANCE_SYMBOL_CONFIGURATION')
         self.assertEqual(self.ledger.confirm_leverage_for_leg(self.intent['leg_id'],10,10,'BINANCE_SYMBOL_CONFIGURATION'),10)
+    def legacy_exit_stub(self):
+        # 과거 확정 레버리지 없는 Leg를 재현하며 실제 서버/거래소를 사용하지 않는다.
+        with self.ledger.transaction() as con:
+            con.execute(
+                'UPDATE r4_active_legs SET policy_snapshot=? WHERE leg_id=?',
+                (json.dumps({'leverage':10}),self.intent['leg_id']),
+            )
+        self.fill(asset='USDT')
+        exit_intent=self.ledger.reserve_exit(self.intent['leg_id'],'legacy-exit',10,'TRAILING')
+        self.ledger.mark_exit_submitted(exit_intent['exit_intent_id'],'19')
+        self.ledger.confirm_exit_fill(
+            exit_intent['exit_intent_id'],'ORDER:19:CUM:10',10,110,
+            exchange_order_id='19',
+        )
+        return exit_intent
+
+    def test_legacy_exit_stub_eligible_without_leverage_proof_but_entry_still_blocked(self):
+        target=self.legacy_exit_stub()
+        self.assertEqual(self.ledger.pending_intents(evidence_only=True),[])
+        eligible=self.ledger.pending_exit_intents(evidence_only=True)
+        self.assertEqual([x['exit_intent_id'] for x in eligible],[target['exit_intent_id']])
+        with closing(self.ledger.connect()) as con:
+            verified=con.execute(
+                "SELECT policy_snapshot FROM r4_active_legs WHERE leg_id=?",
+                (self.intent['leg_id'],)
+            ).fetchone()[0]
+        self.assertNotIn('verified_exchange_leverage_x',verified)
+
+    def test_legacy_exit_evidence_enrichment_does_not_repeat_closed_quantity(self):
+        from multi_strategy_runtime import MultiStrategyRuntime
+        target=self.legacy_exit_stub()
+        before=self.ledger.get_leg(self.intent['leg_id'])
+        ev=self.ev(tid='3',qty=10,cum=10)
+        ev.update(order_id='19',source_event_id='TRADE:3:19',
+                  price_text='110',realized_pnl_text='100')
+        result=dict(found=True,exchange_order_id='19',cumulative_qty_units=10,
+                    fills=[dict(fill_id='TRADE:3:19',qty_units=10,price_ticks=110,
+                                fee_text='0.1',fee_asset='USDT',
+                                realized_pnl_text='100',economic_evidence=ev)])
+        calls=[]
+        exchange=SimpleNamespace(query_by_client_order_id=lambda *args:(calls.append(args) or result))
+        runtime=MultiStrategyRuntime.__new__(MultiStrategyRuntime)
+        runtime.ledger=self.ledger
+        runtime.exchange=exchange
+        actions=runtime.recover_pending(evidence_only=True)
+        self.assertEqual([x['action'] for x in actions],['ECONOMIC_EVIDENCE_CHECKED'])
+        self.assertEqual(self.ledger.get_leg(self.intent['leg_id']),before)
+        with closing(self.ledger.connect()) as con:
+            self.assertEqual(
+                con.execute("SELECT COUNT(*) FROM r4_leg_events WHERE event_type='EXIT_FILL'").fetchone()[0],
+                1,
+            )
+            good=con.execute(
+                "SELECT COUNT(*) FROM r4_trade_evidence WHERE kind='EXIT_FILL' AND evidence_complete=1 AND trade_id='3'"
+            ).fetchone()[0]
+            self.assertEqual(good,1)
+            entry_complete=con.execute(
+                "SELECT COUNT(*) FROM r4_trade_evidence WHERE kind='ENTRY_FILL' AND evidence_complete=1"
+            ).fetchone()[0]
+            self.assertEqual(entry_complete,0)
+        self.assertEqual(self.ledger.pending_exit_intents(evidence_only=True),[])
+        self.assertEqual(self.ledger.pending_intents(evidence_only=True),[])
+        self.assertEqual(len(calls),1)
+        self.assertEqual(target['status'],'INTENT_SAVED')
+
+    def test_legacy_exit_recovery_rejects_exchange_quantity_conflict(self):
+        from multi_strategy_runtime import MultiStrategyRuntime
+        self.legacy_exit_stub()
+        before=self.ledger.get_leg(self.intent['leg_id'])
+        rows_before=self.rows()
+        runtime=MultiStrategyRuntime.__new__(MultiStrategyRuntime)
+        runtime.ledger=self.ledger
+        runtime.exchange=SimpleNamespace(
+            query_by_client_order_id=lambda *args:
+                dict(found=True,exchange_order_id='19',cumulative_qty_units=11)
+        )
+        actions=runtime.recover_pending(evidence_only=True)
+        self.assertEqual([a['action'] for a in actions],['ECONOMIC_EVIDENCE_HOLD'])
+        self.assertEqual(self.ledger.get_leg(self.intent['leg_id']),before)
+        self.assertEqual(self.rows(),rows_before)
+        self.assertEqual(len(self.ledger.pending_exit_intents(evidence_only=True)),1)
+
     def test_missing_legacy_leverage_cannot_be_backfilled_from_today(self):
         with self.ledger.transaction() as con:
             con.execute('UPDATE r4_active_legs SET policy_snapshot=? WHERE leg_id=?',(json.dumps({'leverage':10}),self.intent['leg_id']))
