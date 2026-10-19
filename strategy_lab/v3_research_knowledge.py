@@ -234,6 +234,71 @@ def write_runtime_summary(k=None):
 # ============================================================
 # 깃허브 연구 체크포인트: 단일 기록 담당이 계산 종료 후 저장
 # ============================================================
+
+def _p0_checkpoint_gate_snapshot(gate):
+    """Evidence-only gate summary. Missing or malformed gates never become PASS."""
+    if not isinstance(gate,dict):
+        return {"evaluated":False,"pass":False,"decision":"NOT_EVALUATED","reasons":[]}
+    reasons=gate.get("absolute_fail_reasons") or gate.get("reasons") or []
+    if not isinstance(reasons,list):reasons=[]
+    return {
+        "evaluated":bool(gate),
+        "pass":gate.get("pass") is True,
+        "decision":str(gate.get("decision") or "NOT_EVALUATED")[:80],
+        "reasons":[str(reason)[:120] for reason in reasons[:8]],
+    }
+
+
+def _p0_checkpoint_stage_snapshot(pipeline, pipeline_sha256):
+    """Read-only P0 progress attached to the *same verified zipped stage2 bytes*.
+
+    This is diagnostic metadata only, never a server candidate or certification.
+    Sealed-blind measurement contents and private evidence are not published here.
+    """
+    from collections import Counter
+    baseline={
+        "schema":"B_BOT_P0_CHECKPOINT_STAGE_SNAPSHOT_V1",
+        "pipeline_sha256":pipeline_sha256,
+        "aws_final_certification":"NOT_VERIFIED_BY_GITHUB_RESEARCH",
+        "automatic_registration_authorized":False,
+        "leading_exact_version":"EV_55a86e97dfadf81c_30M",
+        "research_full_and_sealed_blind_pass_count":0,
+    }
+    entries=pipeline.get("entries") if isinstance(pipeline,dict) else None
+    if not isinstance(entries,list):
+        return dict(baseline,status="PIPELINE_EVIDENCE_INVALID",stage_counts={},leading=None)
+    valid=[row for row in entries if isinstance(row,dict) and row.get("eligible") is True]
+    counts=Counter(str(row.get("pipeline_stage") or "UNKNOWN") for row in valid)
+    complete=sum(
+        (row.get("full_validation_gate") or {}).get("pass") is True
+        and (row.get("sealed_final_blind_gate") or {}).get("pass") is True
+        and (row.get("sealed_final_blind_gate") or {}).get("next_stage")=="LOCAL_SHADOW_PENDING"
+        and row.get("pipeline_stage")=="LOCAL_SHADOW_PENDING"
+        for row in valid if isinstance(row.get("full_validation_gate"),dict)
+        and isinstance(row.get("sealed_final_blind_gate"),dict)
+    )
+    target=next((row for row in valid
+                 if str(row.get("exact_strategy_version") or "")==baseline["leading_exact_version"]),None)
+    leading=None
+    if target is not None:
+        leading={
+            "strategy_id":str(target.get("strategy_id") or "")[:120],
+            "exact_strategy_version":baseline["leading_exact_version"],
+            "timeframe":str(target.get("timeframe") or "")[:16],
+            "pipeline_stage":str(target.get("pipeline_stage") or "UNKNOWN")[:100],
+            "last_error":str(target.get("last_error") or "")[:180],
+            "final_risk_gate":_p0_checkpoint_gate_snapshot(target.get("final_risk_gate")),
+            "full_validation_gate":_p0_checkpoint_gate_snapshot(target.get("full_validation_gate")),
+            "sealed_final_blind_gate":_p0_checkpoint_gate_snapshot(target.get("sealed_final_blind_gate")),
+            "redevelopment_cycles_by_gate":{
+                str(k)[:80]:int(v) for k,v in (target.get("redevelopment_cycles_by_gate") or {}).items()
+                if isinstance(v,int) and not isinstance(v,bool)
+            },
+        }
+    return dict(baseline,status="RESEARCH_STAGE_ONLY",stage_counts=dict(sorted(counts.items())),
+                leading=leading,research_full_and_sealed_blind_pass_count=complete)
+
+
 def save_cloud_checkpoint():
     import sys
     import hashlib,json,os,zipfile
@@ -250,6 +315,19 @@ def save_cloud_checkpoint():
             raw=path.read_bytes();name=path.relative_to(root).as_posix()
             if path.suffix=='.json':json.loads(raw.decode('utf-8-sig'))
             archive.writestr(name,raw);receipt['files'][name]={'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
+            if name=='strategy_lab/results/v3/historical_314_pipeline_stage2.json':
+                receipt['p0_stage_status']=_p0_checkpoint_stage_snapshot(
+                    json.loads(raw.decode('utf-8-sig')),receipt['files'][name]['sha256'])
+    receipt.setdefault('p0_stage_status',{
+        'schema':'B_BOT_P0_CHECKPOINT_STAGE_SNAPSHOT_V1',
+        'status':'NO_PIPELINE_EVIDENCE',
+        'pipeline_sha256':None,
+        'aws_final_certification':'NOT_VERIFIED_BY_GITHUB_RESEARCH',
+        'automatic_registration_authorized':False,
+        'research_full_and_sealed_blind_pass_count':0,
+        'leading_exact_version':'EV_55a86e97dfadf81c_30M',
+        'stage_counts':{},'leading':None,
+    })
     receipt['archive_sha256']=hashlib.sha256((out/'checkpoint.zip').read_bytes()).hexdigest()
     (out/'CHECKPOINT.json').write_text(json.dumps(receipt,indent=2))
     print('RESEARCH_CHECKPOINT_SAVED',len(files),file=sys.stderr)
