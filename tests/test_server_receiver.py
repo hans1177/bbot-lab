@@ -75,6 +75,20 @@ class InstallerTests(unittest.TestCase):
         workflow=yaml.safe_load((ROOT/'.github/workflows/research-run.yml').read_text())
         self.assertEqual(workflow['jobs']['research']['env']['BBOT_LOCAL_ROOT'],'${{ github.workspace }}/cloud-research-workspace')
 
+    def test_exact_deployed_predecessor_hash_is_allowed_without_disabling_version_gate(self):
+        source=(ROOT/'strategy_lab/v3_auto_runtime_release.py').read_text()
+        tree=ast.parse(source)
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='install_server_receiver')
+        remote=next(n.value for n in ast.walk(fn) if isinstance(n,ast.Constant) and isinstance(n.value,str) and 'before_pid=service()' in n.value)
+        assert "AWS_RUNTIME_SOURCE_CHANGED" in remote
+        permitted='bd635b3bc7788ca313e9ace2c05dd1fccb9c310ef485ab919f27f3a06ca4e057'
+        self.assertIn("'verified_server_feedback_sha256':"+repr(permitted),source)
+        self.assertIn("payload['verified_server_feedback_sha256']",remote)
+        self.assertIn("if old_sha not in {",remote)
+        self.assertNotIn('force=True',remote)
+        self.assertNotIn('skip_hash_check',remote)
+        self.assertIn("if service()!=before_pid",remote)
+
     def test_receiver_refresh_preserves_live_modes_and_rejects_unrelated_settings(self):
         source=(ROOT/'strategy_lab/v3_auto_runtime_release.py').read_text()
         tree=ast.parse(source)

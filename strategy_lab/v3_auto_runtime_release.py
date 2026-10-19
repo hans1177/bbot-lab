@@ -3360,7 +3360,7 @@ print(json.dumps({'public_key':' '.join(public.split()[:2])}))
     tree=api('/git/trees',{'tree':entries});commit=api('/git/commits',{'message':'Preserve existing release checks for Linux portability review','tree':tree['sha'],'parents':[parent] if parent else []})
     if parent:api('/git/refs/heads/release-checks',{'sha':commit['sha'],'force':False})
     else:api('/git/refs',{'ref':'refs/heads/release-checks','sha':commit['sha']})
-    payload={'runtime':base64.b64encode(runtime).decode(),'runtime_sha256':hashlib.sha256(runtime).hexdigest(),'baseline_sha256':'1cb77962db51e26fccc83cdcbb88b5f801fb0c2dd0d5b29aef3a7637bf486cfb','code_ref':code_ref,'enable_feedback':bool(enable_feedback),'enable_registration':bool(enable_registration),'installed_feedback_sha256':'f93b37ad38f725e1d320a2380305f3d5e00e02639eaeccc1d4de4c5a3841d017','previous_receiver_sha256':'b18cc4eec9d34bce339503aebb1de9eae854e7c6889310bea87c9a544d210baa'}
+    payload={'runtime':base64.b64encode(runtime).decode(),'runtime_sha256':hashlib.sha256(runtime).hexdigest(),'baseline_sha256':'1cb77962db51e26fccc83cdcbb88b5f801fb0c2dd0d5b29aef3a7637bf486cfb','code_ref':code_ref,'enable_feedback':bool(enable_feedback),'enable_registration':bool(enable_registration),'installed_feedback_sha256':'f93b37ad38f725e1d320a2380305f3d5e00e02639eaeccc1d4de4c5a3841d017','previous_receiver_sha256':'b18cc4eec9d34bce339503aebb1de9eae854e7c6889310bea87c9a544d210baa','verified_server_feedback_sha256':'bd635b3bc7788ca313e9ace2c05dd1fccb9c310ef485ab919f27f3a06ca4e057'}
     remote='import base64,json\npayload=json.loads(base64.b64decode('+repr(base64.b64encode(json.dumps(payload).encode()).decode())+'))\n'+r'''
 import fcntl,hashlib,importlib.util,os,subprocess,tempfile,time
 from pathlib import Path
@@ -3373,7 +3373,7 @@ before_pid=service()
 if not before_pid or before_pid=='0':raise RuntimeError('R4_SERVICE_NOT_RUNNING')
 if target.is_symlink():raise RuntimeError('RUNTIME_SOURCE_SYMLINK')
 old=target.read_bytes();old_sha=hashlib.sha256(old).hexdigest();new=base64.b64decode(payload['runtime'])
-if old_sha not in {payload['baseline_sha256'],payload['previous_receiver_sha256'],payload.get('installed_feedback_sha256'),payload['runtime_sha256']}:raise RuntimeError('AWS_RUNTIME_SOURCE_CHANGED')
+if old_sha not in {payload['baseline_sha256'],payload['previous_receiver_sha256'],payload.get('installed_feedback_sha256'),payload['verified_server_feedback_sha256'],payload['runtime_sha256']}:raise RuntimeError('AWS_RUNTIME_SOURCE_CHANGED')
 if hashlib.sha256(new).hexdigest()!=payload['runtime_sha256']:raise RuntimeError('INSTALL_SOURCE_HASH')
 compile(new,'strategy_runtime.py','exec')
 settings=state/'r4_github_receiver.json'
