@@ -159,8 +159,11 @@ class R4UserStreamTests(unittest.TestCase):
                 self.assertEqual(calls[1][1]["listen_key"], "FIXTURE")
                 self.assertTrue(stream.keeper.started)
                 self.assertTrue(callable(instances[0].callbacks["on_message"]))
-                if old_sdk or bad_signature:
+                if old_sdk:
                     self.assertEqual(set(instances[0].callbacks), {"on_message"})
+                elif bad_signature:
+                    self.assertIsNone(instances[0].callbacks["on_close"])
+                    self.assertIsNone(instances[0].callbacks["on_error"])
                 else:
                     self.assertTrue(callable(instances[0].callbacks["on_close"]))
                     self.assertTrue(callable(instances[0].callbacks["on_error"]))
