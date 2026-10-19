@@ -1,5 +1,5 @@
 # 파일명: tests/test_cloud_checkpoint.py
-import contextlib,hashlib,io,json,os,shutil,tempfile,unittest,zipfile,importlib.util,ast,argparse,sys,types
+import base64,contextlib,hashlib,io,json,os,shutil,tempfile,unittest,zipfile,importlib.util,ast,argparse,sys,types
 from pathlib import Path
 from unittest.mock import patch
 import yaml
@@ -60,6 +60,99 @@ class CloudCheckpointTests(unittest.TestCase):
             return io.StringIO(json.dumps(result))
         env=dict(self.env,GH_TOKEN='fixture',GITHUB_REPOSITORY='owner/repo',GITHUB_RUN_ATTEMPT='1')
         with patch.dict(os.environ,env),patch('urllib.request.urlopen',side_effect=request):module.publish_cloud_checkpoint()
+    def test_chunked_upload_preserves_exact_archive_and_manifest(self):
+        # Incompressible bytes force more than one Git Blob, without cloud writes.
+        (self.state/'research_fixture.parquet').write_bytes(os.urandom(8*1024**2+2048))
+        self.publish()
+        posted=[body for path,body in self.requests if path=='/git/blobs']
+        files=[base64.b64decode(body['content']) for body in posted]
+        transports=[json.loads(raw) for raw in files if raw.startswith(b'{"archive_bytes":')]
+        self.assertEqual(len(transports),1)
+        manifest=transports[0]
+        self.assertEqual(manifest['schema'],'B_BOT_RESEARCH_CHECKPOINT_PARTS_V1')
+        self.assertGreaterEqual(len(manifest['parts']),2)
+        uploaded_chunks=[raw for raw in files if len(raw)>=8*1024**2 or (raw and raw[:2] not in (b'{',b'PK'))]
+        self.assertGreaterEqual(len(uploaded_chunks),2)
+        self.assertEqual(
+            hashlib.sha256((self.base/'research-checkpoint-out/checkpoint.zip').read_bytes()).hexdigest(),
+            manifest['archive_sha256']
+        )
+        tree=next(body for path,body in self.requests if path=='/git/trees')
+        self.assertEqual(
+            {x['path'] for x in tree['tree']},
+            {'CHECKPOINT.json','checkpoint.parts.json'}|{p['name'] for p in manifest['parts']}
+        )
+        self.assertNotIn('checkpoint.zip',{x['path'] for x in tree['tree']})
+
+    def mocked_download(self, chunked=True, tamper=None):
+        self.run_step('Preserve research checkpoint')
+        source=self.base/'research-checkpoint-out'
+        receipt=(source/'CHECKPOINT.json').read_bytes()
+        archive=(source/'checkpoint.zip').read_bytes()
+        blobs={'CHECKPOINT.json':receipt}
+        if chunked:
+            parts=[]
+            for index,offset in enumerate(range(0,len(archive),8*1024**2)):
+                raw=archive[offset:offset+8*1024**2]
+                name=f'checkpoint.part{index:04d}'
+                parts.append({'name':name,'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()})
+                blobs[name]=raw
+            transport={'schema':'B_BOT_RESEARCH_CHECKPOINT_PARTS_V1',
+                'archive_sha256':hashlib.sha256(archive).hexdigest(),
+                'archive_bytes':len(archive),'chunk_bytes':8*1024**2,
+                'parts':parts}
+            blobs['checkpoint.parts.json']=json.dumps(transport).encode()
+        else:
+            blobs['checkpoint.zip']=archive
+        if tamper:
+            blobs[tamper]=b'X'*len(blobs[tamper])
+        objects={hashlib.sha256(name.encode()).hexdigest()[:40]:raw for name,raw in blobs.items()}
+        tree=[{'path':name,'sha':hashlib.sha256(name.encode()).hexdigest()[:40],
+               'type':'blob','size':len(raw),'mode':'100644'}
+              for name,raw in blobs.items()]
+        def get(request,timeout):
+            endpoint=request.full_url.split('/repos/owner/repo',1)[1]
+            if endpoint=='/git/ref/heads/research-state':
+                payload={'object':{'sha':'h'*40}}
+            elif endpoint=='/git/commits/'+'h'*40:
+                payload={'tree':{'sha':'t'*40}}
+            elif endpoint=='/git/trees/'+'t'*40:
+                payload={'tree':tree}
+            elif endpoint.startswith('/git/blobs/'):
+                raw=objects[endpoint.rsplit('/',1)[-1]]
+                payload={'encoding':'base64','size':len(raw),
+                    'content':base64.b64encode(raw).decode()}
+            else:
+                raise AssertionError('unexpected '+endpoint)
+            return io.StringIO(json.dumps(payload))
+        env=dict(self.env,GH_TOKEN='fixture',GITHUB_REPOSITORY='owner/repo')
+        with patch.dict(os.environ,env),patch('urllib.request.urlopen',side_effect=get),contextlib.redirect_stdout(io.StringIO()):
+            self.run_step('Download checkpoint')
+        return archive
+
+    def test_chunked_restore_recreates_byte_identical_zip_then_exact_state(self):
+        expected=self.mocked_download()
+        downloaded=(self.base/'research-checkpoint-in/checkpoint.zip').read_bytes()
+        self.assertEqual(downloaded,expected)
+        self.run_step('Restore exact research state')
+        self.assertEqual(json.loads((self.state/'trial_ledger.json').read_text())['entries'],[{'trial':1}])
+
+    def test_legacy_checkpoint_still_restores(self):
+        expected=self.mocked_download(chunked=False)
+        self.assertEqual((self.base/'research-checkpoint-in/checkpoint.zip').read_bytes(),expected)
+        self.run_step('Restore exact research state')
+
+    def test_tampered_chunk_is_rejected_before_research_restore(self):
+        with self.assertRaisesRegex(RuntimeError,'STATE_PART_HASH_MISMATCH'):
+            self.mocked_download(tamper='checkpoint.part0000')
+
+    def test_chunked_transport_extra_file_rejected(self):
+        # Exercise strict published tree contract at extraction point.
+        source=STEPS['Download checkpoint']['run']
+        self.assertIn("set(entries)!=expected",source)
+        self.assertIn("STATE_PART_SET_INVALID",source)
+        self.assertIn("STATE_PART_HASH_MISMATCH",source)
+
     def test_remote_advance_blocks_stale_checkpoint_before_any_write(self):
         with self.assertRaisesRegex(RuntimeError,'CHECKPOINT_REMOTE_STATE_CHANGED'):self.publish(head='other-run')
         self.assertTrue(all(body is None for _,body in self.requests))
