@@ -4908,6 +4908,50 @@
       "bytes": 447428,
       "sha256": "378d5c0134f3f8bddaa630d5ecfaa580ab8644fb5c99134cc4c00c63902ef667"
     },
+    "strategy_lab/results/20261019_173621_V3_EFFICIENCY_PULLBACK_RESUME_12H_BROAD_V1.json": {
+      "bytes": 447465,
+      "sha256": "f2d011543b068e2c4c6f481cdb66c731d724344441283f001fbfe094dd345846"
+    },
+    "strategy_lab/results/20261019_173626_V3_EFFICIENCY_PULLBACK_RESUME_12H_BROAD_V1.json": {
+      "bytes": 447564,
+      "sha256": "970a0ec290e6b09a8b7a722140b3a92981b6fc87979ad9d716e1ceabe49ce407"
+    },
+    "strategy_lab/results/20261019_173631_V3_EFFICIENCY_PULLBACK_RESUME_12H_BROAD_V1.json": {
+      "bytes": 447019,
+      "sha256": "f3c4edb7ace3b45c70877ced8a8c6962e19763cedc1bac78887e87b5731dcc09"
+    },
+    "strategy_lab/results/20261019_173637_V3_EFFICIENCY_PULLBACK_RESUME_12H_BROAD_V1.json": {
+      "bytes": 447507,
+      "sha256": "bcc057ab695c5cdaece629119f38095e2d190de270fa3fb911a07c3b652c2d4b"
+    },
+    "strategy_lab/results/20261019_173645_V3_EFFICIENCY_PULLBACK_RESUME_12H_BROAD_V1.json": {
+      "bytes": 447396,
+      "sha256": "9f6d6cdfa5c4424969b4c493a15a2d00c145cb10f4954485d2e4a2291844502f"
+    },
+    "strategy_lab/results/20261019_173650_V3_EFFICIENCY_PULLBACK_RESUME_12H_BROAD_V1.json": {
+      "bytes": 447323,
+      "sha256": "107b46ea62a76f26bbf833d7b2c598b3a390575cdbaafcdd93a86436cb6294ae"
+    },
+    "strategy_lab/results/20261019_173655_V3_EFFICIENCY_PULLBACK_RESUME_12H_BROAD_V1.json": {
+      "bytes": 447361,
+      "sha256": "d0e63889f8706d73f01f911241934dd22603db64c48512384145a8ea68967c2e"
+    },
+    "strategy_lab/results/20261019_173700_V3_EFFICIENCY_PULLBACK_RESUME_12H_BROAD_V1.json": {
+      "bytes": 447384,
+      "sha256": "47c29230482ce8fc2f18448d34925c0c4a4aa9c123bff667fc4d935da9c73f1a"
+    },
+    "strategy_lab/results/20261019_173706_V3_EFFICIENCY_PULLBACK_RESUME_12H_BROAD_V1.json": {
+      "bytes": 447545,
+      "sha256": "b4a506dfbbf2963374f540c23a480c6ff4d78809f8d5b5e24bf3dc197a8c1768"
+    },
+    "strategy_lab/results/20261019_173711_V3_EFFICIENCY_PULLBACK_RESUME_12H_BROAD_V1.json": {
+      "bytes": 447617,
+      "sha256": "9e6d2aaed7be4a8294d6628e003d05c0115a71dec990f0ad9906d36d2712de9d"
+    },
+    "strategy_lab/results/20261019_173716_V3_EFFICIENCY_PULLBACK_RESUME_12H_BROAD_V1.json": {
+      "bytes": 447325,
+      "sha256": "32f862474ea792cae0268e94e4bc2d112ace09ea6ee9cd35f69c25a66c15ccec"
+    },
     "strategy_lab/results/v3/auto_runtime_release_state.json": {
       "bytes": 156,
       "sha256": "6e2c0b2d38c60f42aa97c7142b0a37c39e0b965d39b9ffe97a87e19cf2be9b7d"
@@ -7314,15 +7358,15 @@
     },
     "strategy_lab/results/v3/historical_314_pipeline_stage2.json": {
       "bytes": 1191756,
-      "sha256": "07d6bae6deab724aca1781e26fcd65dff5ae35d8d7a03f212a5e7fa87f2eb857"
+      "sha256": "530c93c3f042723b621df38ed4c5649af8daf740d7c020e79c8cb5dc43e9cdd1"
     },
     "strategy_lab/results/v3/individual_reentry_final_risk_stage4.json": {
       "bytes": 384397,
       "sha256": "4d6d944c76257b5ca71920515f7bd628380316e37d186ac84b15b2fc19785247"
     },
     "strategy_lab/results/v3/individual_trailing_stage3.json": {
-      "bytes": 677789,
-      "sha256": "acdb2ca40115e79174c96f4b7f02f6224cf4a2185ef7a6a1d5e185db37689777"
+      "bytes": 692541,
+      "sha256": "50546b0c445ac62e1d23449412795dce59e6f53b5c35e4647251a47d7412b997"
     },
     "strategy_lab/results/v3/redeveloped_strategies/v3_adaptive_channel_rfull_validation_1.py": {
       "bytes": 2954,
@@ -7425,8 +7469,8 @@
       "sha256": "37185c3519074280828b6fa4dca25af2b064848c045490a789c285578034ff15"
     },
     "strategy_lab/results/v3/roadmap_queue.json": {
-      "bytes": 385471,
-      "sha256": "fdbb638ded29b8327998b2b901501b97cc90533116683b56c00ccb8e8cb6feb4"
+      "bytes": 385475,
+      "sha256": "38ee7a1dfc93cae3ffe034768776cb224ed074c6a43fbedf8672cda09e561817"
     },
     "strategy_lab/results/v3/runtime_diagnostics.json": {
       "bytes": 9465,
@@ -7437,9 +7481,9 @@
       "sha256": "c320971a75e5b6b3c1dc6804b1243d0d9ee69c6d82df393900622b636440c697"
     },
     "strategy_lab/results/v3/trial_ledger.json": {
-      "bytes": 760776,
-      "sha256": "182202ddc3872b607b40e4ca807c4a369769c2c194984adaaf13091e161d1558"
+      "bytes": 768173,
+      "sha256": "26072dadabf1cba9ea20adc8222beb07786a4033ac473108d96fd597ad9dbc5a"
     }
   },
-  "archive_sha256": "cfab543aa62809cfb64d3a621f24d8bcb9fef32a1df7b121cbea261b8bcd2225"
+  "archive_sha256": "c6f104109fe2600e52cd7bf81ac55fec263eae2649b532522a48091babccefb1"
 }
