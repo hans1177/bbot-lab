@@ -36,6 +36,7 @@ def certification_progress(root, manifest_path):
     final_gates = []
     invalid_shadow = []
     nearest = []
+    full_validation_failures = []
     for row in entries:
         if not isinstance(row, dict) or row.get("eligible") is not True:
             continue
@@ -49,6 +50,16 @@ def certification_progress(root, manifest_path):
         identity = str(row.get("canonical_identity_key") or "")
         exact = str(row.get("exact_strategy_version") or "")
         strategy = str(row.get("strategy_id") or "")
+        if (isinstance(full_gate, dict) and full_gate.get("pass") is False
+                and full_gate.get("decision") == "FAIL"):
+            full_validation_failures.append({
+                "strategy": strategy, "version": exact,
+                "timeframe": str(row.get("timeframe") or ""),
+                "stage": stage, "last_checked_at": str(row.get("last_checked_at") or ""),
+                "absolute_fail_reasons": full_gate.get("absolute_fail_reasons") or [],
+                "compensation_flags": full_gate.get("compensation_flags") or [],
+                "pass_mode": full_gate.get("pass_mode"),
+            })
         if stage == "LOCAL_SHADOW_PENDING":
             if validated and identity and exact and strategy:
                 final_gates.append({"strategy": strategy, "version": exact,
@@ -95,6 +106,11 @@ def certification_progress(root, manifest_path):
         "unverified_shadow_stage_count": len(invalid_shadow),
         "stage_counts": dict(sorted(counts.items())),
         "pipeline_entries_seen": len(entries),
+        "full_validation_failed_count": len(full_validation_failures),
+        "full_validation_failures": sorted(
+            full_validation_failures,
+            key=lambda r:(r["last_checked_at"],r["version"]),reverse=True
+        )[:8],
         "closest_trailing": sorted(nearest,
               key=lambda r: (-r["fine_measured"], r["fine_planned"], r["version"]))[:5],
         "handoff_awaiting_server_validation_count": len(handoff),
@@ -129,6 +145,9 @@ def main():
             "- 잘못된 LOCAL_SHADOW_PENDING 증거: " +
                 str(report["unverified_shadow_stage_count"]),
             "- 상태: " + report["first_final_pass_status"],
+            "- 전체 검증 탈락(기록된 버전): " + str(report["full_validation_failed_count"]),
+            "- 최근 전체 검증 탈락 사유: " +
+                json.dumps(report["full_validation_failures"][:3], ensure_ascii=False),
             "- 가장 앞선 추적손절 검증: " +
                 json.dumps(report["closest_trailing"][:1], ensure_ascii=False),
             "",
