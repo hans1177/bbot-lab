@@ -862,6 +862,35 @@ def _finalize_trailing_selection(state,target,stage3,item):
     }
 
 
+def _trailing_remaining_work_key(target, entries):
+    """Prioritize resumable near-finished trailing work, never observed returns.
+
+    This scheduling decision depends only on *which frozen pair trials have
+    completed*, not their profitability or selection results. It changes no
+    parameter plans, trial identities, candidate evaluation or promotion gate.
+    """
+    identity=str(target.get("canonical_identity_key") or "")
+    item=entries.get(identity) if isinstance(entries,dict) else None
+    if not isinstance(item,dict) or str(item.get("exact_strategy_version") or "")!=str(target.get("exact_strategy_version") or ""):
+        return (3,0)
+    coarse=item.get("coarse_candidates") or []
+    completed=item.get("coarse_results") or {}
+    if not isinstance(coarse,list) or not isinstance(completed,dict):
+        return (3,0)
+    incomplete=sum(_trailing_pair_key(p.get("start_pct"),p.get("callback_pct")) not in completed
+                   for p in coarse if isinstance(p,dict))
+    if incomplete:
+        return (2,incomplete)
+    if "fine_candidates" not in item:
+        return (1,0)
+    fine=item.get("fine_candidates") or []
+    done=item.get("fine_results") or {}
+    if not isinstance(fine,list) or not isinstance(done,dict):
+        return (3,0)
+    return (0,sum(_trailing_pair_key(p.get("start_pct"),p.get("callback_pct")) not in done
+                  for p in fine if isinstance(p,dict)))
+
+
 def run_individual_trailing_one():
     state=load(HISTORICAL_STAGE2,{})
     override_target=next((x for x in (state.get("entries") or []) if isinstance(x,dict) and x.get("eligible") is True and x.get("pipeline_stage")=="INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING" and isinstance(x.get("redevelopment_trailing_override"),dict)),None)
@@ -912,11 +941,12 @@ def run_individual_trailing_one():
     ]
     if not targets:
         return {"status":"NO_TRAILING_BACKLOG","at":now()}
-    target=targets[0]
     stage3=load(
         TRAILING_STAGE3,
         {"schema":"B_BOT_INDIVIDUAL_TRAILING_STAGE3_V1","entries":{},"automatic_promotion":False},
     )
+    # Stable tie order retains the existing canonical pipeline ordering.
+    target=min(targets,key=lambda x:_trailing_remaining_work_key(x,stage3.get("entries") or {}))
     item=_ensure_stage3_entry(stage3,target)
 
     coarse=item.setdefault("coarse_results",{})
@@ -1667,7 +1697,7 @@ def run_full_validation_one():
     item.update({"strategy_id":target.get("strategy_id"),"exact_strategy_version":target.get("exact_strategy_version"),"timeframe":tf,"full_validation_gate":gate,"pipeline_stage":target.get("pipeline_stage"),"last_checked_at":now()})
     atomic(FULL_VALIDATION_STAGE5,stage)
     knowledge.record_result(f"pipeline_full_validation:{target.get('strategy_id')}:{tf}:{target.get('exact_strategy_version')}",{"strategy_id":target.get("strategy_id"),"exact_strategy_version":target.get("exact_strategy_version"),"timeframe":tf,"pipeline_stage":target.get("pipeline_stage"),"full_validation_gate":gate,"automatic_promotion":False,"canary_eligible":False},failed=(not bool(gate.get("pass"))))
-    return {"status":"PASS" if bool(gate.get("pass")) else "FAIL","strategy_id":target.get("strategy_id"),"exact_strategy_version":target.get("exact_strategy_version"),"timeframe":tf,"pipeline_stage":target.get("pipeline_stage"),"full_validation_decision":gate.get("decision"),"full_validation_pass_mode":gate.get("pass_mode"),"automatic_promotion":False}
+    return {"status":"PASS" if bool(gate.get("pass")) else "FAIL","strategy_id":target.get("strategy_id"),"exact_strategy_version":target.get("exact_strategy_version"),"timeframe":tf,"pipeline_stage":target.get("pipeline_stage"),"full_validation_decision":gate.get("decision"),"full_validation_pass_mode":gate.get("pass_mode"),"full_validation_absolute_fail_reasons":gate.get("absolute_fail_reasons") or [],"full_validation_compensation_flags":gate.get("compensation_flags") or [],"full_validation_compensation_strengths":gate.get("compensation_strengths") or [],"full_validation_metrics":gate.get("metrics") or {},"automatic_promotion":False}
 
 
 def _parse_utc(value):
