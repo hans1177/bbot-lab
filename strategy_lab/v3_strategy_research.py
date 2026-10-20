@@ -862,6 +862,53 @@ def _finalize_trailing_selection(state,target,stage3,item):
     }
 
 
+def _recover_ineligible_baseline_trailing_one(state):
+    """Re-evaluate frozen completed measurements rejected by the old comparator.
+
+    This is not a retry of a failed experiment. Exact source hashes, original
+    pair results, trial history and the full frozen-result verifier are kept.
+    Only an independently robust positive alternative can advance.
+    """
+    stage3=load(TRAILING_STAGE3,{"entries":{}})
+    entries=stage3.get("entries") or {}
+    for target in state.get("entries") or []:
+        if not isinstance(target,dict) or target.get("eligible") is not True:
+            continue
+        if target.get("pipeline_stage")!="INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE":
+            continue
+        identity=str(target.get("canonical_identity_key") or "")
+        item=entries.get(identity)
+        if not isinstance(item,dict) or item.get("status")!="INCOMPLETE":
+            continue
+        if str(item.get("exact_strategy_version") or "")!=str(target.get("exact_strategy_version") or ""):
+            continue
+        if item.get("source_integrity_error"):
+            continue
+        if str((item.get("selection") or {}).get("reason") or "")!="BASELINE_3_0_1_5_NOT_MEASURED_OR_INVALID":
+            continue
+        if "fine_candidates" not in item:
+            continue
+        baseline=(item.get("coarse_results") or {}).get(_trailing_pair_key(3.0,1.5))
+        if not isinstance(baseline,dict) or baseline.get("status")!="MEASURED":
+            continue
+        evaluations={}
+        evaluations.update(item.get("coarse_results") or {})
+        evaluations.update(item.get("fine_results") or {})
+        preview=policy_research.research_exit({
+            "mode":"INDIVIDUAL_STRATEGY_TRAILING",
+            "action":"SELECT",
+            "timeframe":target.get("timeframe"),
+            "minimum_trades":MIN_TRADES.get(str(target.get("timeframe") or "").upper(),1),
+            "evaluations":evaluations,
+        })
+        if preview.get("status")!="SELECTED":
+            continue
+        # Existing finalize performs source-hash, exact-version, frozen
+        # measurement and report-path verification before any stage advance.
+        return _finalize_trailing_selection(state,target,stage3,item)
+    return None
+
+
 def run_individual_trailing_one():
     state=load(HISTORICAL_STAGE2,{})
     override_target=next((x for x in (state.get("entries") or []) if isinstance(x,dict) and x.get("eligible") is True and x.get("pipeline_stage")=="INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING" and isinstance(x.get("redevelopment_trailing_override"),dict)),None)
@@ -904,6 +951,9 @@ def run_individual_trailing_one():
         atomic(TRAILING_STAGE3,stage3)
         override_target["pipeline_stage"]="REENTRY_RESEARCH_PENDING"; override_target["last_checked_at"]=now(); _save_historical_stage2(state)
         return {"status":"COMPLETE","strategy_id":override_target.get("strategy_id"),"exact_strategy_version":override_target.get("exact_strategy_version"),"timeframe":override_target.get("timeframe"),"pipeline_stage":"REENTRY_RESEARCH_PENDING","individual_trailing":override_target.get("individual_trailing"),"selection_status":"SELECTED","selection_reason":"TARGETED_FINAL_RISK_REDEVELOPMENT_MEASURED","automatic_promotion":False}
+    recovered=_recover_ineligible_baseline_trailing_one(state)
+    if recovered is not None:
+        return recovered
     targets=[
         x for x in (state.get("entries") or [])
         if isinstance(x,dict)
