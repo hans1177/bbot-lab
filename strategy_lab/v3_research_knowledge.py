@@ -235,68 +235,163 @@ def write_runtime_summary(k=None):
 # 깃허브 연구 체크포인트: 단일 기록 담당이 계산 종료 후 저장
 # ============================================================
 
-def _p0_checkpoint_gate_snapshot(gate):
-    """Evidence-only gate summary. Missing or malformed gates never become PASS."""
-    if not isinstance(gate,dict):
-        return {"evaluated":False,"pass":False,"decision":"NOT_EVALUATED","reasons":[]}
-    reasons=gate.get("absolute_fail_reasons") or gate.get("reasons") or []
-    if not isinstance(reasons,list):reasons=[]
-    return {
-        "evaluated":bool(gate),
-        "pass":gate.get("pass") is True,
-        "decision":str(gate.get("decision") or "NOT_EVALUATED")[:80],
-        "reasons":[str(reason)[:120] for reason in reasons[:8]],
+def _p0_checkpoint_gate_snapshot(gate, diagnostics=False):
+    """Bounded read-only evidence summary; never interpret missing gates as PASS."""
+    if not isinstance(gate, dict):
+        return {"evaluated": False, "pass": False, "decision": "NOT_EVALUATED", "reasons": []}
+    reasons = gate.get("absolute_fail_reasons") or gate.get("reasons") or []
+    if not isinstance(reasons, list):
+        reasons = []
+    summary = {
+        "evaluated": bool(gate),
+        "pass": gate.get("pass") is True,
+        "decision": str(gate.get("decision") or "NOT_EVALUATED")[:80],
+        "reasons": [str(reason)[:120] for reason in reasons[:8]],
     }
+    if not diagnostics:
+        return summary
+
+    # Only final-risk/full-validation diagnostic fields; no sealed-blind contents.
+    summary["pass_mode"] = str(gate.get("pass_mode") or "NONE")[:80]
+    for key in ("absolute_fail_reasons", "compensation_flags", "compensation_strengths"):
+        values = gate.get(key) or []
+        summary[key] = [str(value)[:120] for value in values[:12]] if isinstance(values, list) else []
+    count = gate.get("minimum_compensation_strength_count")
+    if isinstance(count, int) and not isinstance(count, bool):
+        summary["minimum_compensation_strength_count"] = count
+    ratios = gate.get("ratios")
+    if isinstance(ratios, dict):
+        summary["ratios"] = {
+            key: ratios[key] for key in ("mdd", "dd_duration", "cvar95", "holding")
+            if isinstance(ratios.get(key), (int, float)) and not isinstance(ratios[key], bool)
+        }
+    streak = gate.get("max_consecutive_losses_add")
+    if isinstance(streak, int) and not isinstance(streak, bool):
+        summary["max_consecutive_losses_add"] = streak
+    metrics = gate.get("metrics")
+    if isinstance(metrics, dict):
+        keys = (
+            "trades", "positive_robustness_slice_ratio", "positive_robustness_slices",
+            "measured_robustness_slices", "top_5pct_trade_net_profit_share",
+        )
+        summary["metrics"] = {
+            key: metrics[key] for key in keys
+            if isinstance(metrics.get(key), (int, float)) and not isinstance(metrics[key], bool)
+        }
+        for key in ("measured_regime_classes", "positive_regime_classes"):
+            values = metrics.get(key)
+            if isinstance(values, list):
+                summary["metrics"][key] = [str(value)[:24] for value in values[:3]]
+    return summary
 
 
 def _p0_checkpoint_stage_snapshot(pipeline, pipeline_sha256):
-    """Read-only P0 progress attached to the *same verified zipped stage2 bytes*.
+    """Bounded P0 lineage bound to the same archived stage2 SHA-256.
 
-    This is diagnostic metadata only, never a server candidate or certification.
-    Sealed-blind measurement contents and private evidence are not published here.
+    Only explicit child+reciprocal parent links establish an exact-version
+    lineage. This read-only diagnostic cannot certify blind, shadow or AWS.
     """
     from collections import Counter
-    baseline={
-        "schema":"B_BOT_P0_CHECKPOINT_STAGE_SNAPSHOT_V1",
-        "pipeline_sha256":pipeline_sha256,
-        "aws_final_certification":"NOT_VERIFIED_BY_GITHUB_RESEARCH",
-        "automatic_registration_authorized":False,
-        "leading_exact_version":"EV_55a86e97dfadf81c_30M",
-        "research_full_and_sealed_blind_pass_count":0,
+    baseline = {
+        "schema": "B_BOT_P0_CHECKPOINT_STAGE_SNAPSHOT_V1",
+        "pipeline_sha256": pipeline_sha256,
+        "aws_final_certification": "NOT_VERIFIED_BY_GITHUB_RESEARCH",
+        "automatic_registration_authorized": False,
+        "leading_exact_version": "EV_55a86e97dfadf81c_30M",
+        "research_full_and_sealed_blind_pass_count": 0,
     }
-    entries=pipeline.get("entries") if isinstance(pipeline,dict) else None
-    if not isinstance(entries,list):
-        return dict(baseline,status="PIPELINE_EVIDENCE_INVALID",stage_counts={},leading=None)
-    valid=[row for row in entries if isinstance(row,dict) and row.get("eligible") is True]
-    counts=Counter(str(row.get("pipeline_stage") or "UNKNOWN") for row in valid)
-    complete=sum(
+    entries = pipeline.get("entries") if isinstance(pipeline, dict) else None
+    if not isinstance(entries, list):
+        return dict(baseline, status="PIPELINE_EVIDENCE_INVALID", stage_counts={},
+                    leading=None, leading_current=None, leading_lineage=[],
+                    leading_lineage_status="PIPELINE_EVIDENCE_INVALID")
+    valid = [row for row in entries if isinstance(row, dict) and row.get("eligible") is True]
+    counts = Counter(str(row.get("pipeline_stage") or "UNKNOWN") for row in valid)
+    complete = sum(
         (row.get("full_validation_gate") or {}).get("pass") is True
         and (row.get("sealed_final_blind_gate") or {}).get("pass") is True
-        and (row.get("sealed_final_blind_gate") or {}).get("next_stage")=="LOCAL_SHADOW_PENDING"
-        and row.get("pipeline_stage")=="LOCAL_SHADOW_PENDING"
-        for row in valid if isinstance(row.get("full_validation_gate"),dict)
-        and isinstance(row.get("sealed_final_blind_gate"),dict)
+        and (row.get("sealed_final_blind_gate") or {}).get("next_stage") == "LOCAL_SHADOW_PENDING"
+        and row.get("pipeline_stage") == "LOCAL_SHADOW_PENDING"
+        for row in valid if isinstance(row.get("full_validation_gate"), dict)
+        and isinstance(row.get("sealed_final_blind_gate"), dict)
     )
-    target=next((row for row in valid
-                 if str(row.get("exact_strategy_version") or "")==baseline["leading_exact_version"]),None)
-    leading=None
-    if target is not None:
-        leading={
-            "strategy_id":str(target.get("strategy_id") or "")[:120],
-            "exact_strategy_version":baseline["leading_exact_version"],
-            "timeframe":str(target.get("timeframe") or "")[:16],
-            "pipeline_stage":str(target.get("pipeline_stage") or "UNKNOWN")[:100],
-            "last_error":str(target.get("last_error") or "")[:180],
-            "final_risk_gate":_p0_checkpoint_gate_snapshot(target.get("final_risk_gate")),
-            "full_validation_gate":_p0_checkpoint_gate_snapshot(target.get("full_validation_gate")),
-            "sealed_final_blind_gate":_p0_checkpoint_gate_snapshot(target.get("sealed_final_blind_gate")),
-            "redevelopment_cycles_by_gate":{
-                str(k)[:80]:int(v) for k,v in (target.get("redevelopment_cycles_by_gate") or {}).items()
-                if isinstance(v,int) and not isinstance(v,bool)
+
+    def summarize(row):
+        return {
+            "strategy_id": str(row.get("strategy_id") or "")[:120],
+            "exact_strategy_version": str(row.get("exact_strategy_version") or "")[:120],
+            "timeframe": str(row.get("timeframe") or "")[:16],
+            "pipeline_stage": str(row.get("pipeline_stage") or "UNKNOWN")[:100],
+            "last_error": str(row.get("last_error") or "")[:180],
+            "parent_exact_strategy_version": str(row.get("parent_exact_strategy_version") or "")[:120],
+            "redevelopment_child_exact_version": str(row.get("redevelopment_child_exact_version") or "")[:120],
+            "final_risk_gate": _p0_checkpoint_gate_snapshot(row.get("final_risk_gate"), diagnostics=True),
+            "full_validation_gate": _p0_checkpoint_gate_snapshot(row.get("full_validation_gate"), diagnostics=True),
+            "sealed_final_blind_gate": _p0_checkpoint_gate_snapshot(row.get("sealed_final_blind_gate")),
+            "redevelopment_cycles_by_gate": {
+                str(k)[:80]: int(v) for k, v in (row.get("redevelopment_cycles_by_gate") or {}).items()
+                if isinstance(v, int) and not isinstance(v, bool)
             },
         }
-    return dict(baseline,status="RESEARCH_STAGE_ONLY",stage_counts=dict(sorted(counts.items())),
-                leading=leading,research_full_and_sealed_blind_pass_count=complete)
+
+    root = next((row for row in valid if str(row.get("exact_strategy_version") or "")
+                 == baseline["leading_exact_version"]), None)
+    leading = summarize(root) if root is not None else None
+    lineage = []
+    current = None
+    status = "ROOT_NOT_FOUND"
+    if root is not None:
+        same = [row for row in valid
+                if str(row.get("strategy_id") or "") == str(root.get("strategy_id") or "")
+                and str(row.get("timeframe") or "") == str(root.get("timeframe") or "")]
+        by_version = {}
+        duplicates = set()
+        for row in same:
+            version = str(row.get("exact_strategy_version") or "")
+            if version in by_version:
+                duplicates.add(version)
+            else:
+                by_version[version] = row
+        seen = set()
+        cursor = root
+        while True:
+            version = str(cursor.get("exact_strategy_version") or "")
+            if version in duplicates:
+                status = "DUPLICATE_EXACT_VERSION"
+                break
+            if version in seen or len(seen) >= len(same):
+                status = "LINEAGE_CYCLE"
+                break
+            seen.add(version)
+            lineage.append(summarize(cursor))
+            child_version = str(cursor.get("redevelopment_child_exact_version") or "")
+            if not child_version:
+                if str(cursor.get("pipeline_stage") or "") == "REDEVELOPMENT_SUPERSEDED_BY_NEW_VERSION":
+                    status = "SUPERSEDED_CHILD_POINTER_MISSING"
+                else:
+                    status = "ROOT_CURRENT" if len(lineage) == 1 else "CURRENT_DESCENDANT"
+                    current = lineage[-1]
+                break
+            if child_version in seen:
+                status = "LINEAGE_CYCLE"
+                break
+            if child_version in duplicates:
+                status = "DUPLICATE_EXACT_VERSION"
+                break
+            child = by_version.get(child_version)
+            if child is None:
+                status = "CHILD_NOT_FOUND"
+                break
+            if str(child.get("parent_exact_strategy_version") or "") != version:
+                status = "PARENT_LINK_MISMATCH"
+                break
+            cursor = child
+
+    return dict(
+        baseline, status="RESEARCH_STAGE_ONLY", stage_counts=dict(sorted(counts.items())),
+        leading=leading, leading_current=current, leading_lineage=lineage,
+        leading_lineage_status=status, research_full_and_sealed_blind_pass_count=complete,
+    )
 
 
 def save_cloud_checkpoint():
