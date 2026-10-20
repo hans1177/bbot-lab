@@ -81,6 +81,37 @@ class FirstFinalPassReportTests(unittest.TestCase):
         self.pipeline([row])
         self.assertEqual(self.report()["research_full_and_sealed_blind_pass_count"], 0)
 
+    def test_report_exposes_full_validation_failure_without_changing_gates(self):
+        row = dict(self.trial, pipeline_stage="FULL_VALIDATION_REDEVELOPMENT_PENDING",
+                   full_validation_gate={
+                       "pass": False, "decision": "FAIL", "pass_mode": "NONE",
+                       "absolute_fail_reasons": [
+                           "FULL_VALIDATION_PROFIT_CONCENTRATION_ABSOLUTE_FAIL"
+                       ],
+                       "compensation_flags": []
+                   }, last_checked_at="2026-10-20T12:00:00Z")
+        self.pipeline([row])
+        before = (self.v3 / "historical_314_pipeline_stage2.json").read_bytes()
+        progress = self.report()
+        self.assertEqual(progress["full_validation_failed_count"], 1)
+        self.assertEqual(progress["research_full_and_sealed_blind_pass_count"], 0)
+        failed = progress["full_validation_failures"][0]
+        self.assertEqual(failed["strategy"], "TEST_CANDIDATE")
+        self.assertEqual(failed["absolute_fail_reasons"],
+                         ["FULL_VALIDATION_PROFIT_CONCENTRATION_ABSOLUTE_FAIL"])
+        self.assertEqual((self.v3 / "historical_314_pipeline_stage2.json").read_bytes(),
+                         before)
+        self.assertEqual(progress["aws_final_certification"],
+                         "NOT_VERIFIED_BY_GITHUB_RESEARCH")
+
+    def test_validated_stage_never_counted_as_full_validation_failure(self):
+        row = dict(self.trial, pipeline_stage="SEALED_FINAL_BLIND_PENDING",
+                   full_validation_gate={"pass": True, "decision": "PASS"})
+        self.pipeline([row])
+        progress = self.report()
+        self.assertEqual(progress["full_validation_failed_count"], 0)
+        self.assertEqual(progress["full_validation_failures"], [])
+
     def test_handoff_still_requires_real_server_shadow(self):
         self.put(self.manifest, {"candidates": [{
             "strategy_id": "TEST_CANDIDATE", "timeframe": "30M",
