@@ -26,6 +26,19 @@ class CloudCheckpointTests(unittest.TestCase):
     def save(self):
         self.run_step('Preserve research checkpoint')
         shutil.copytree(self.base/'research-checkpoint-out',self.base/'research-checkpoint-in')
+    def test_public_checkpoint_rejects_credentials_without_upload(self):
+        self.env['BBOT_PUBLIC_RESEARCH']='1'
+        (self.state/'trial_ledger.json').write_text(json.dumps({'token':'ghp_'+'A'*36}))
+        with self.assertRaisesRegex(RuntimeError,'PUBLIC_RESEARCH_SECRET_REJECTED'):
+            self.run_step('Preserve research checkpoint')
+        self.assertFalse((self.base/'research-checkpoint-out/CHECKPOINT.json').exists())
+
+    def test_public_checkpoint_marks_scanned_state(self):
+        self.env['BBOT_PUBLIC_RESEARCH']='1'
+        self.run_step('Preserve research checkpoint')
+        receipt=json.loads((self.base/'research-checkpoint-out/CHECKPOINT.json').read_text())
+        self.assertEqual(receipt['public_secret_scan'],'PASS')
+
     def test_p0_stage_snapshot_binds_same_archived_exact_version_evidence(self):
         pipeline_path=self.state/'historical_314_pipeline_stage2.json'
         pipeline={
