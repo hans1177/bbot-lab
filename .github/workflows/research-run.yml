@@ -364,7 +364,7 @@ jobs:
         run: |
           set -o pipefail
           case "$REQUESTED_CYCLES" in 0|1|4|8) ;; *) exit 40 ;; esac
-          python "$BBOT_LOCAL_ROOT/strategy_lab/research_controller.py" --mode loop --enable-research --max-cycles "$REQUESTED_CYCLES" --sleep-sec 1 --checkpoint-seconds 60 --time-budget-seconds 18000 --finish-margin-seconds 1800 | tee "$RUNNER_TEMP/research-cycles.jsonl"
+          python "$BBOT_LOCAL_ROOT/strategy_lab/research_controller.py" --mode loop --enable-research --max-cycles "$REQUESTED_CYCLES" --sleep-sec 1 --checkpoint-seconds 900 --time-budget-seconds 18000 --finish-margin-seconds 1800 | tee "$RUNNER_TEMP/research-cycles.jsonl"
           python - <<'PY'
           import json,os
           from pathlib import Path
