@@ -10,6 +10,7 @@ on:
       - '.github/workflows/research-run.yml'
       - 'strategy_lab/v3_strategy_research.py'
       - 'strategy_lab/research_controller.py'
+      - 'strategy_lab/v3_research_knowledge.py'
       - 'strategy_lab/v3_auto_runtime_release.py'
   workflow_dispatch:
     inputs:
@@ -28,7 +29,6 @@ concurrency:
   cancel-in-progress: false
 jobs:
   research:
-    if: github.event_name != 'schedule' || github.event.repository.private == true
     runs-on: ubuntu-latest
     timeout-minutes: 350
     env:
@@ -36,11 +36,20 @@ jobs:
       BBOT_AUTO_RESEARCH_MANAGER_V1: '1'
       B_BOT_V3_SERVER_PUSH_HOLD: '1'
       PYTHONDONTWRITEBYTECODE: '1'
+      BBOT_PUBLIC_RESEARCH: ${{ github.event.repository.private == false && '1' || '0' }}
     steps:
-      - name: Require private research storage
+      - name: Verify public research exposure contract
         env:
           IS_PRIVATE: ${{ github.event.repository.private }}
-        run: test "$IS_PRIVATE" = true
+        run: |
+          case "$IS_PRIVATE" in
+            true) echo 'PRIVATE_RESEARCH_STORAGE' ;;
+            false)
+              test "$BBOT_PUBLIC_RESEARCH" = "1"
+              echo 'PUBLIC_RESEARCH_STORAGE_AND_RESULTS_VISIBLE'
+              ;;
+            *) exit 40 ;;
+          esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -48,7 +57,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install -r requirements-research-test.txt
-      - name: Checkout fixed private input revision
+      - name: Checkout fixed verified input revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: 1153b49dc173eedf45bef023b06b2e873b2985ef
@@ -407,7 +416,7 @@ jobs:
           sys.path.insert(0,str(Path(os.environ['BBOT_LOCAL_ROOT'])/'strategy_lab'))
           import v3_research_knowledge
           v3_research_knowledge.save_cloud_checkpoint()
-      - name: Upload private checkpoint
+      - name: Upload verified research checkpoint
         id: checkpoint_upload
         if: always() && steps.checkpoint.outcome == 'success'
         env:
