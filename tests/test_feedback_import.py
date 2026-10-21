@@ -7,7 +7,7 @@ ROOT=Path(__file__).resolve().parents[1]
 FN=next(n for n in ast.parse((ROOT/'strategy_lab/v3_auto_runtime_release.py').read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='pull')
 class FeedbackImportTests(unittest.TestCase):
     def setUp(self):
-        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name);self.results=self.root/'strategy_lab/results/v3';self.results.mkdir(parents=True);self.request=self.results/'runtime_sync_request.json';self.calls=[];self.resolved=[]
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name);self.results=self.root/'strategy_lab/results/v3';self.results.mkdir(parents=True);self.request=self.results/'runtime_sync_request.json';self.calls=[];self.resolved=[];self.repository={'id':1420885516,'full_name':'hans1177/bbot-lab','private':True}
         opening=int(time.time()//3600)*3600000-3600000
         self.heartbeat={'schema':'B_BOT_V3_COLLECTOR_HEARTBEAT_V1','updated_at_epoch':time.time()-30,'active_symbols':['BTCUSDT']}
         self.config={'core_symbols':['BTCUSDT']};self.market={'schema':'B_BOT_PUBLIC_CLOSED_BARS_V1','columns':['open_time_ms','open','high','low','close','volume'],'bars':{'BTCUSDT':{'1H':[[opening-(64-i)*3600000,100,102,99,101,10] for i in range(65)]}}}
@@ -24,7 +24,7 @@ class FeedbackImportTests(unittest.TestCase):
         raw['MANIFEST.json']=json.dumps(manifest).encode()
         if self.corrupt:raw['MARKET.json']+=b' '
         names={str(i)*40:n for i,n in enumerate(raw,1)}
-        if path=='':value={'private':True}
+        if path=='':value=self.repository
         elif path=='/git/ref/heads/runtime-feedback':
             if self.missing:raise urllib.error.HTTPError(request.full_url,404,'missing',{},None)
             value={'object':{'sha':'a'*40}}
@@ -42,6 +42,21 @@ class FeedbackImportTests(unittest.TestCase):
         result=self.call();self.assertEqual(result['status'],'SERVER_FEEDBACK_IMPORTED');self.assertEqual(result['source_heartbeat_epoch'],self.heartbeat['updated_at_epoch']);self.assertEqual(json.loads((self.root/'strategy_config.json').read_text()),self.config);self.assertEqual(self.resolved,[True])
         import pandas as pd
         frame=pd.read_parquet(self.root/'data/candles/BTCUSDT/1h.parquet');self.assertTrue(frame['is_closed'].all());self.assertEqual(int(frame['open_time'].iloc[-1].timestamp()*1000),self.market['bars']['BTCUSDT']['1H'][-1][0]);self.assertFalse((self.root/'config.json').exists());self.assertFalse((self.root/'state/history.db').exists());self.assertTrue(all(request.get_method()=='GET' for request in self.calls))
+    def test_public_canonical_repository_keeps_hash_and_credential_checks(self):
+        self.repository['private']=False
+        self.assertEqual(self.call()['status'],'SERVER_FEEDBACK_IMPORTED')
+        self.config['api_key']='never-import-credential'
+        with self.assertRaisesRegex(RuntimeError,'CREDENTIAL_FIELD'):self.call()
+
+    def test_other_repository_identity_is_rejected_before_feedback_reads(self):
+        for field,value in [('id',1),('full_name','other/bbot-lab'),('private',None)]:
+            with self.subTest(field=field):
+                original=self.repository[field];self.repository[field]=value;self.calls.clear()
+                with self.assertRaisesRegex(RuntimeError,'CANONICAL_FEEDBACK_REPOSITORY_REQUIRED'):self.call()
+                self.assertEqual(len(self.calls),1)
+                self.assertFalse((self.root/'strategy_config.json').exists())
+                self.repository[field]=original
+
     def test_hash_mismatch_writes_nothing(self):
         self.corrupt=True
         with self.assertRaisesRegex(RuntimeError,'HASH_MISMATCH'):self.call()
@@ -97,3 +112,4 @@ class FeedbackImportTests(unittest.TestCase):
 
     def test_existing_request_preserved_without_network_calls(self):
         raw=b'{"approved_for_server_release":true}';self.request.write_bytes(raw);self.assertEqual(self.call()['status'],'WAIT_EXISTING_RUNTIME_REQUEST');self.assertEqual(self.request.read_bytes(),raw);self.assertEqual(self.calls,[])
+

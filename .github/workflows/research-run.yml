@@ -28,7 +28,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   research:
-    if: github.event_name != 'schedule' || github.event.repository.private == true
+    if: github.repository == 'hans1177/bbot-lab' && github.repository_id == '1420885516'
     runs-on: ubuntu-latest
     timeout-minutes: 350
     env:
@@ -37,10 +37,13 @@ jobs:
       B_BOT_V3_SERVER_PUSH_HOLD: '1'
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
-      - name: Require private research storage
+      - name: Require canonical research repository
         env:
-          IS_PRIVATE: ${{ github.event.repository.private }}
-        run: test "$IS_PRIVATE" = true
+          RESEARCH_REPOSITORY: ${{ github.repository }}
+          RESEARCH_REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          test "$RESEARCH_REPOSITORY" = hans1177/bbot-lab
+          test "$RESEARCH_REPOSITORY_ID" = 1420885516
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -419,3 +422,4 @@ jobs:
           sys.path.insert(0,str(Path(os.environ['BBOT_LOCAL_ROOT'])/'strategy_lab'))
           import v3_research_knowledge
           v3_research_knowledge.publish_cloud_checkpoint(include_candidates=True)
+
