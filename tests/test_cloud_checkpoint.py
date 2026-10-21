@@ -66,6 +66,19 @@ class CloudCheckpointTests(unittest.TestCase):
                     hashlib.sha256(archive.read('strategy_lab/results/v3/'+name)).hexdigest(),
                     stats[sha])
 
+    def test_large_checkpoint_transport_has_bounded_reupload_frequency(self):
+        # Full checkpoints can exceed 300 MiB and 30 Git blobs.
+        # The canonical workflow must not try that upload every minute.
+        controller=STEPS['Run existing research controller']['run']
+        self.assertIn('--checkpoint-seconds 900',controller)
+        self.assertIn('--time-budget-seconds 18000',controller)
+        self.assertIn('--finish-margin-seconds 1800',controller)
+        final=STEPS['Preserve research checkpoint']
+        self.assertIn('save_cloud_checkpoint()',final['run'])
+        self.assertIn('always()',final['if'])
+        upload=STEPS['Upload verified research checkpoint']
+        self.assertIn('publish_cloud_checkpoint(include_candidates=True)',upload['run'])
+
     def test_p0_stage_snapshot_binds_same_archived_exact_version_evidence(self):
         pipeline_path=self.state/'historical_314_pipeline_stage2.json'
         pipeline={
