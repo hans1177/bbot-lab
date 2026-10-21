@@ -301,8 +301,15 @@ def _p0_checkpoint_stage_snapshot(pipeline, pipeline_sha256):
 
 def save_cloud_checkpoint():
     import sys
-    import hashlib,json,os,zipfile
+    import hashlib,json,os,zipfile,re
     from pathlib import Path
+    public_mode=os.environ.get('BBOT_PUBLIC_RESEARCH')=='1'
+    sensitive_patterns=(
+        rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',
+        rb'(?:AKIA|ASIA)[A-Z0-9]{16}',
+        rb'gh[pousr]_[A-Za-z0-9]{30,}',
+        rb'\d{9,12}:[A-Za-z0-9_-]{35}',
+    )
     root=Path(os.environ['BBOT_LOCAL_ROOT']);out=Path(os.environ['RUNNER_TEMP'])/'research-checkpoint-out';out.mkdir(exist_ok=True)
     state=root/'strategy_lab/results'
     files=[path for path in state.rglob('*') if path.is_file() and path.suffix.lower() in {'.json','.jsonl','.py','.csv','.parquet'} and '__pycache__' not in path.parts]
@@ -313,6 +320,8 @@ def save_cloud_checkpoint():
             if path.is_symlink() or not path.resolve().is_relative_to(state.resolve()):raise RuntimeError('STATE_PATH_FORBIDDEN')
             if path.stat().st_size>512*1024**2:raise RuntimeError('STATE_FILE_TOO_LARGE')
             raw=path.read_bytes();name=path.relative_to(root).as_posix()
+            if public_mode and any(re.search(pattern,raw) for pattern in sensitive_patterns):
+                raise RuntimeError('PUBLIC_RESEARCH_SECRET_REJECTED:'+name)
             if path.suffix=='.json':json.loads(raw.decode('utf-8-sig'))
             archive.writestr(name,raw);receipt['files'][name]={'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
             if name=='strategy_lab/results/v3/historical_314_pipeline_stage2.json':
@@ -329,6 +338,7 @@ def save_cloud_checkpoint():
         'stage_counts':{},'leading':None,
     })
     receipt['archive_sha256']=hashlib.sha256((out/'checkpoint.zip').read_bytes()).hexdigest()
+    if public_mode:receipt['public_secret_scan']='PASS'
     (out/'CHECKPOINT.json').write_text(json.dumps(receipt,indent=2))
     print('RESEARCH_CHECKPOINT_SAVED',len(files),file=sys.stderr)
     return receipt
@@ -336,8 +346,9 @@ def save_cloud_checkpoint():
 
 def publish_cloud_checkpoint(include_candidates=False):
     import sys
-    import base64,hashlib,json,os,urllib.request,urllib.error
+    import base64,hashlib,json,os,re,urllib.request,urllib.error
     from pathlib import Path
+    public_mode=os.environ.get('BBOT_PUBLIC_RESEARCH')=='1'
     api='https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']
     def request(path,data=None,method=None):
         body=None if data is None else json.dumps(data).encode()
@@ -357,6 +368,8 @@ def publish_cloud_checkpoint(include_candidates=False):
         receipt=json.loads(receipt_raw)
         if receipt.get('schema')!='B_BOT_RESEARCH_CHECKPOINT_V1':
             raise RuntimeError('CHECKPOINT_TRANSPORT_RECEIPT_INVALID')
+        if public_mode and receipt.get('public_secret_scan')!='PASS':
+            raise RuntimeError('PUBLIC_CHECKPOINT_SCAN_NOT_VERIFIED')
         chunk_bytes=8*1024**2
         sha=hashlib.sha256()
         parts=[]
@@ -409,6 +422,15 @@ def publish_cloud_checkpoint(include_candidates=False):
             upload=((path.relative_to(out).as_posix(),path.read_bytes()) for path in sorted(out.rglob('*')) if path.is_file())
         for name,raw in upload:
             if len(raw)>90*1024**2:raise RuntimeError('CHECKPOINT_GIT_BLOB_LIMIT')
+            if public_mode and branch=='runtime-candidates':
+                sensitive_patterns=(
+                    rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',
+                    rb'(?:AKIA|ASIA)[A-Z0-9]{16}',
+                    rb'gh[pousr]_[A-Za-z0-9]{30,}',
+                    rb'\d{9,12}:[A-Za-z0-9_-]{35}',
+                )
+                if any(re.search(pattern,raw) for pattern in sensitive_patterns):
+                    raise RuntimeError('PUBLIC_RUNTIME_CANDIDATE_SECRET_REJECTED:'+name)
             try:
                 blob=request('/git/blobs',{'content':base64.b64encode(raw).decode(),'encoding':'base64'})
             except urllib.error.HTTPError as error:
@@ -421,4 +443,4 @@ def publish_cloud_checkpoint(include_candidates=False):
         else:request('/git/refs',{'ref':'refs/heads/'+branch,'sha':commit['sha']})
         if request('/git/ref/heads/'+branch)['object']['sha']!=commit['sha']:raise RuntimeError('CHECKPOINT_REF_VERIFY')
         if branch=='research-state':atomic(lease,{'head':commit['sha']})
-        print('PRIVATE_GIT_HANDOFF_SAVED_AND_VERIFIED',branch,commit['sha'],file=sys.stderr)
+        print('GIT_HANDOFF_SAVED_AND_VERIFIED',branch,commit['sha'],file=sys.stderr)
