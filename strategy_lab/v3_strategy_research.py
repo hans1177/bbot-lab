@@ -578,7 +578,10 @@ def _block_trailing_source_drift(state,target,stage3,item,reason):
     target["direct_canary_allowed"]=False
     target["last_checked_at"]=now()
     item["status"]="INCOMPLETE"
-    item["source_integrity_error"]=reason
+    if reason in {"RUN_STRATEGY_FAIL","RESULT_NOT_FOUND","TRAILING_RUN_TIMEOUT"}:
+        item["runtime_error"]=reason
+    else:
+        item["source_integrity_error"]=reason
     item["last_checked_at"]=now()
     _save_historical_stage2(state)
     atomic(TRAILING_STAGE3,stage3)
@@ -637,6 +640,8 @@ def _run_trailing_pair(state,target,stage3,item,pair,phase):
         trial_kind,
     )
     env=os.environ.copy(); env["BBOT_LOCAL_ROOT"]=str(ROOT)
+    # Keep bounded trial CPU within the existing shared GitHub runner budget.
+    env.update(OMP_NUM_THREADS="1",OPENBLAS_NUM_THREADS="1",MKL_NUM_THREADS="1")
     research_start,research_end=hard_pass_dates()
     env["BBOT_RESEARCH_DATASET_MODE"]="HARD_PASS_ONLY"
     env["BBOT_RESEARCH_START"]=research_start
@@ -678,7 +683,9 @@ def _run_trailing_pair(state,target,stage3,item,pair,phase):
         }
         atomic(TRAILING_STAGE3,stage3)
         knowledge.complete_trial(trial,"RUN_STRATEGY_FAIL","FAIL","UNKNOWN")
-        return {"status":"FAIL","reason":"RUN_STRATEGY_FAIL","pair":pair,"trial":trial,"phase":phase}
+        # No missing/non-MEASURED grid cell can pass frozen selection.
+        # A completed failed trial is protected by the existing rerun guard.
+        return _block_trailing_source_drift(state,target,stage3,item,"RUN_STRATEGY_FAIL")
     result=find_result(strategy_id,started)
     if result is None:
         try: source_name=str(load_meta(source).get("name") or "").upper()
@@ -693,7 +700,7 @@ def _run_trailing_pair(state,target,stage3,item,pair,phase):
         }
         atomic(TRAILING_STAGE3,stage3)
         knowledge.complete_trial(trial,"RESULT_NOT_FOUND","FAIL","UNKNOWN")
-        return {"status":"FAIL","reason":"RESULT_NOT_FOUND","pair":pair,"trial":trial,"phase":phase}
+        return _block_trailing_source_drift(state,target,stage3,item,"RESULT_NOT_FOUND")
     report=load(result,{})
     binding_error=_trailing_result_binding_error(report,target,pair,source)
     if binding_error is None:
@@ -831,6 +838,7 @@ def _finalize_trailing_selection(state,target,stage3,item):
         target["pipeline_stage"]="REENTRY_RESEARCH_PENDING"
     else:
         target["pipeline_stage"]="INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE"
+        target["last_error"]=str(selection.get("reason") or "TRAILING_SELECTION_INCOMPLETE")
     target["direct_canary_allowed"]=False
     target["last_checked_at"]=now()
     _save_historical_stage2(state)
