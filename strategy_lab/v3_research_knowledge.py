@@ -299,6 +299,50 @@ def _p0_checkpoint_stage_snapshot(pipeline, pipeline_sha256):
                 leading=leading,research_full_and_sealed_blind_pass_count=complete)
 
 
+def _p0_checkpoint_trailing_blockers(pipeline, stage3):
+    """Count verified frozen trailing blockers without publishing candidate details.
+
+    Derive only from the same unmodified archived Stage2/Stage3 bytes.
+    This is telemetry, never an input to gate selection or promotion.
+    """
+    from collections import Counter
+    entries=(pipeline or {}).get('entries') or []
+    stage3_entries=(stage3 or {}).get('entries') or {}
+    if not isinstance(entries,list) or not isinstance(stage3_entries,dict):
+        return {'status':'INVALID_EVIDENCE','reasons':{}}
+    safe_codes={
+        'TRAILING_RUN_TIMEOUT','RUN_STRATEGY_FAIL','RESULT_NOT_FOUND',
+        'TRAILING_CANONICAL_SOURCE_UNAVAILABLE','TRAILING_EXACT_SOURCE_BINDING_MISSING',
+        'TRAILING_EXACT_SOURCE_HASH_MISMATCH',
+        'TRAILING_RESULT_INVALID','TRAILING_RESULT_SOURCE_MISSING',
+        'TRAILING_RESULT_SOURCE_MISMATCH','TRAILING_RESULT_CONFIG_MISSING',
+        'TRAILING_RESULT_CONFIG_INVALID','TRAILING_RESULT_CONFIG_MISMATCH',
+        'TRAILING_FROZEN_RESULT_STRUCTURE_INVALID','TRAILING_FROZEN_PAIR_INVALID',
+        'TRAILING_FROZEN_MEASUREMENT_MISSING','TRAILING_FROZEN_PAIR_MISMATCH',
+        'TRAILING_FROZEN_RESULT_PATH_INVALID','TRAILING_FROZEN_RESULT_MISSING',
+        'TRAILING_FROZEN_RESULT_TOO_LARGE','TRAILING_FROZEN_RESULT_UNREADABLE',
+        'TRAILING_FROZEN_EVIDENCE_MISMATCH','TRAILING_FROZEN_RESEARCH_WINDOW_INVALID',
+        'BASELINE_3_0_1_5_NOT_MEASURED_OR_INVALID',
+        'TRAILING_SELECTION_INCOMPLETE','NO_ROBUST_MULTI_METRIC_IMPROVEMENT',
+    }
+    blocked=Counter()
+    for row in entries:
+        if not isinstance(row,dict) or row.get('eligible') is not True:
+            continue
+        if row.get('pipeline_stage')!='INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE':
+            continue
+        identity=str(row.get('canonical_identity_key') or '')
+        item=stage3_entries.get(identity)
+        item=item if isinstance(item,dict) else {}
+        selection=item.get('selection') or {}
+        if not isinstance(selection,dict):selection={}
+        reason=(row.get('last_error') or item.get('runtime_error')
+                or item.get('source_integrity_error') or selection.get('reason'))
+        category=str(reason) if isinstance(reason,str) and reason in safe_codes else 'OTHER_OR_UNRECORDED'
+        blocked[category]+=1
+    return {'status':'RESEARCH_BLOCKER_COUNTS_ONLY','reasons':dict(sorted(blocked.items()))}
+
+
 def save_cloud_checkpoint():
     import sys
     import hashlib,json,os,zipfile,re
@@ -337,6 +381,18 @@ def save_cloud_checkpoint():
         'leading_exact_version':'EV_55a86e97dfadf81c_30M',
         'stage_counts':{},'leading':None,
     })
+    # Inspect the exact archived bytes, not a mutable working copy.
+    stage2_name='strategy_lab/results/v3/historical_314_pipeline_stage2.json'
+    stage3_name='strategy_lab/results/v3/individual_trailing_stage3.json'
+    if stage2_name in receipt['files'] and stage3_name in receipt['files']:
+        with zipfile.ZipFile(out/'checkpoint.zip') as sealed:
+            stage2=json.loads(sealed.read(stage2_name).decode('utf-8-sig'))
+            stage3=json.loads(sealed.read(stage3_name).decode('utf-8-sig'))
+        receipt['p0_stage_status']['trailing_blocker_diagnostics']={
+            'source_stage2_sha256':receipt['files'][stage2_name]['sha256'],
+            'source_stage3_sha256':receipt['files'][stage3_name]['sha256'],
+            **_p0_checkpoint_trailing_blockers(stage2,stage3),
+        }
     receipt['archive_sha256']=hashlib.sha256((out/'checkpoint.zip').read_bytes()).hexdigest()
     if public_mode:receipt['public_secret_scan']='PASS'
     (out/'CHECKPOINT.json').write_text(json.dumps(receipt,indent=2))

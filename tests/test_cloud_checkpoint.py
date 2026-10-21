@@ -39,6 +39,33 @@ class CloudCheckpointTests(unittest.TestCase):
         receipt=json.loads((self.base/'research-checkpoint-out/CHECKPOINT.json').read_text())
         self.assertEqual(receipt['public_secret_scan'],'PASS')
 
+    def test_checkpoint_diagnoses_trailing_blockers_from_same_archive(self):
+        entries=[
+            {'eligible':True,'pipeline_stage':'INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE',
+             'canonical_identity_key':'version-a','last_error':'TRAILING_RUN_TIMEOUT'},
+            {'eligible':True,'pipeline_stage':'INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE',
+             'canonical_identity_key':'version-b','last_error':'user-provided sensitive metadata'},
+            {'eligible':True,'pipeline_stage':'INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING',
+             'canonical_identity_key':'version-c'},
+        ]
+        (self.state/'historical_314_pipeline_stage2.json').write_text(json.dumps({'entries':entries}))
+        (self.state/'individual_trailing_stage3.json').write_text(json.dumps({
+            'entries':{'version-a':{'status':'INCOMPLETE'},
+                       'version-b':{'status':'INCOMPLETE'}}}))
+        self.run_step('Preserve research checkpoint')
+        out=self.base/'research-checkpoint-out'
+        receipt=json.loads((out/'CHECKPOINT.json').read_text())
+        stats=receipt['p0_stage_status']['trailing_blocker_diagnostics']
+        self.assertEqual(stats['reasons'],
+                         {'OTHER_OR_UNRECORDED':1,'TRAILING_RUN_TIMEOUT':1})
+        self.assertNotIn('sensitive metadata',json.dumps(stats))
+        with zipfile.ZipFile(out/'checkpoint.zip') as archive:
+            for name,sha in [('historical_314_pipeline_stage2.json','source_stage2_sha256'),
+                             ('individual_trailing_stage3.json','source_stage3_sha256')]:
+                self.assertEqual(
+                    hashlib.sha256(archive.read('strategy_lab/results/v3/'+name)).hexdigest(),
+                    stats[sha])
+
     def test_p0_stage_snapshot_binds_same_archived_exact_version_evidence(self):
         pipeline_path=self.state/'historical_314_pipeline_stage2.json'
         pipeline={
