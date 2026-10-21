@@ -5,6 +5,7 @@ Unit tests isolate the production selector. No backtest or live orders are run.
 """
 import ast
 import unittest
+from typing import Any
 from pathlib import Path
 
 
@@ -27,6 +28,7 @@ class TrailingBaselineComparatorTests(unittest.TestCase):
                  if isinstance(n, ast.FunctionDef) and n.name in FUNCTIONS]
         assert {n.name for n in nodes} == FUNCTIONS
         namespace = {
+            "Any": Any,
             "_individual_trailing_contract": lambda: {
                 "baseline": {"start_pct": 3.0, "callback_pct": 1.5},
                 "selection_neighbor_positive_ratio_min": 0.70,

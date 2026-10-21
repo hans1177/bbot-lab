@@ -3,6 +3,7 @@ measured evidence and a genuinely qualified alternative (no trial replay).
 """
 import ast
 import unittest
+from typing import Any
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ def isolated_functions(path, names, namespace):
     selected = [n for n in tree.body
                 if isinstance(n, ast.FunctionDef) and n.name in names]
     assert {n.name for n in selected} == names
+    namespace["Any"] = Any
     exec(compile(ast.Module(body=selected, type_ignores=[]),
                  str(path), "exec"), namespace)
     return namespace
