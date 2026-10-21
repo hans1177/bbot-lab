@@ -1341,7 +1341,9 @@ def pull(label, research_only=False, runtime_feedback=False):
         def api(path):
             request=urllib.request.Request('https://api.github.com/repos/hans1177/bbot-lab'+path,headers={'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json'})
             with urllib.request.urlopen(request,timeout=30) as response:return json.load(response)
-        if api('').get('private') is not True:raise RuntimeError('PRIVATE_FEEDBACK_REPOSITORY_REQUIRED')
+        repository=api('')
+        if (repository.get('id')!=1420885516 or repository.get('full_name')!='hans1177/bbot-lab'
+            or type(repository.get('private')) is not bool):raise RuntimeError('CANONICAL_FEEDBACK_REPOSITORY_REQUIRED')
         try:head=api('/git/ref/heads/runtime-feedback')['object']['sha']
         except urllib.error.HTTPError as error:
             if error.code==404:return {'status':'WAIT_SERVER_FEEDBACK'}
@@ -3684,4 +3686,5 @@ if __name__ == "__main__":
     raise SystemExit(
         main()
     )
+
 

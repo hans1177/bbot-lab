@@ -3,6 +3,7 @@ import base64,contextlib,hashlib,io,json,os,shutil,tempfile,unittest,zipfile,imp
 from pathlib import Path
 from unittest.mock import patch
 import yaml
+import subprocess
 
 REPO=Path(__file__).resolve().parents[1]
 WORKFLOW=yaml.safe_load((REPO/'.github/workflows/research-run.yml').read_text())
@@ -26,6 +27,19 @@ class CloudCheckpointTests(unittest.TestCase):
     def save(self):
         self.run_step('Preserve research checkpoint')
         shutil.copytree(self.base/'research-checkpoint-out',self.base/'research-checkpoint-in')
+    def test_canonical_repository_preflight_runs_with_either_visibility(self):
+        job=WORKFLOW['jobs']['research']
+        self.assertIn("github.repository == 'hans1177/bbot-lab'",job['if'])
+        self.assertIn("github.repository_id == '1420885516'",job['if'])
+        self.assertNotIn('private',job['if'])
+        script=STEPS['Require canonical research repository']['run']
+        for private in ('true','false'):
+            env=dict(os.environ,RESEARCH_REPOSITORY='hans1177/bbot-lab',RESEARCH_REPOSITORY_ID='1420885516',IS_PRIVATE=private)
+            self.assertEqual(subprocess.run(['bash','-e','-c',script],env=env).returncode,0)
+        for repository,identity in [('other/bbot-lab','1420885516'),('hans1177/bbot-lab','1')]:
+            env=dict(os.environ,RESEARCH_REPOSITORY=repository,RESEARCH_REPOSITORY_ID=identity)
+            self.assertNotEqual(subprocess.run(['bash','-e','-c',script],env=env).returncode,0)
+
     def test_p0_stage_snapshot_binds_same_archived_exact_version_evidence(self):
         pipeline_path=self.state/'historical_314_pipeline_stage2.json'
         pipeline={
@@ -280,3 +294,4 @@ class CloudCheckpointTests(unittest.TestCase):
     def test_inline_python_compiles(self):
         for name,step in STEPS.items():
             if step.get('shell')=='python':compile(step['run'],name,'exec')
+
