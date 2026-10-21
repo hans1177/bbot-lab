@@ -550,17 +550,31 @@ def _individual_trailing_select(context) -> dict[str, Any]:
         if abs(row["start_pct"]-float(baseline_cfg.get("start_pct",3.0))) < 1e-12 and abs(row["callback_pct"]-float(baseline_cfg.get("callback_pct",1.5))) < 1e-12:
             baseline = row
             break
-    if baseline is None or not _trailing_row_eligible(baseline, minimum_trades):
+    if baseline is None:
+        # A comparison baseline must be measured; never invent its evidence.
         return {
             "status":"INCOMPLETE",
             "selected":None,
             "fallback":baseline_cfg,
-            "reason":"BASELINE_3_0_1_5_NOT_MEASURED_OR_INVALID",
+            "reason":"BASELINE_3_0_1_5_NOT_MEASURED",
             "live_effect":False,
         }
 
     base_ev = baseline.get("evidence") or {}
     base_wf = _metric(base_ev, "walk_forward_oos_expectancy_pct")
+    if base_wf is None:
+        return {
+            "status":"INCOMPLETE",
+            "selected":None,
+            "fallback":baseline_cfg,
+            "reason":"BASELINE_3_0_1_5_WF_EVIDENCE_MISSING",
+            "live_effect":False,
+        }
+    # The frozen baseline is a comparator, not the only allowed exit policy.
+    # An ineligible measured baseline cannot be used as a fallback. A new
+    # selected pair must still have positive OOS / 2x-cost expectancy, beat
+    # the measured baseline, and satisfy the existing neighborhood checks.
+    baseline_eligible = _trailing_row_eligible(baseline, minimum_trades)
     candidates = []
     for row in rows:
         if not _trailing_row_eligible(row, minimum_trades):
@@ -614,6 +628,16 @@ def _individual_trailing_select(context) -> dict[str, Any]:
         })
 
     if not candidates:
+        if not baseline_eligible:
+            # Fail closed if neither the baseline nor any robust improvement
+            # is eligible; do not promote an unprofitable fallback.
+            return {
+                "status":"INCOMPLETE",
+                "selected":None,
+                "fallback":baseline_cfg,
+                "reason":"BASELINE_INELIGIBLE_NO_ROBUST_VALID_ALTERNATIVE",
+                "live_effect":False,
+            }
         return {
             "status":"FALLBACK",
             "selected":dict(baseline_cfg),
