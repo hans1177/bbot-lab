@@ -62,7 +62,7 @@ class ExactTrailingSourceIntegrityTests(unittest.TestCase):
         exec(compile(ast.Module(body=funcs,type_ignores=[]),"isolated_exact_trailing","exec"),ns)
         self.ns=ns
 
-    def simulated_report_run(self, report, runner=None):
+    def simulated_report_run(self, report, runner=None, finder=None):
         """Run only the isolated result-binding segment; no real backtest."""
         completed=[]
         self.knowledge.reserve_trial=lambda *args,**kw:17
@@ -76,7 +76,7 @@ class ExactTrailingSourceIntegrityTests(unittest.TestCase):
             "time":SimpleNamespace(time=lambda:1.0),
             "subprocess":SimpleNamespace(PIPE=-1,STDOUT=-2,TimeoutExpired=subprocess.TimeoutExpired,
                 run=runner or (lambda *args,**kw:SimpleNamespace(returncode=0,stdout=""))),
-            "find_result":lambda *args:self.root/"strategy_lab/results/v3/synthetic.json",
+            "find_result":finder or (lambda *args:self.root/"strategy_lab/results/v3/synthetic.json"),
             "load":lambda *args:report,
             "_trailing_evidence":lambda *args:{"trades":500,"expectancy_pct":0.1},
         })
@@ -99,6 +99,41 @@ class ExactTrailingSourceIntegrityTests(unittest.TestCase):
         self.assertEqual(len(calls),1)
         self.assertEqual(calls[0]["timeout"],1800)
         self.assertEqual(self.target["pipeline_stage"],"INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING")
+
+    def test_trailing_subprocess_cpu_threads_bounded(self):
+        calls=[]
+        def run(*args,**kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(returncode=0,stdout="")
+        result,_=self.simulated_report_run(self.good_report(),runner=run)
+        self.assertEqual(result["status"],"MEASURED")
+        for key in ("OMP_NUM_THREADS","OPENBLAS_NUM_THREADS","MKL_NUM_THREADS"):
+            self.assertEqual(calls[0]["env"][key],"1")
+
+    def test_trailing_failed_subprocess_stops_unrecoverable_grid(self):
+        result,completed=self.simulated_report_run(
+            self.good_report(),
+            runner=lambda *a,**kw:SimpleNamespace(returncode=1,stdout="fixture_failure"),
+        )
+        self.assertEqual(result["reason"],"RUN_STRATEGY_FAIL")
+        self.assertEqual(result["status"],"FAIL")
+        self.assertEqual(self.target["pipeline_stage"],"INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE")
+        self.assertEqual(self.item["runtime_error"],"RUN_STRATEGY_FAIL")
+        self.assertEqual(self.item["fine_results"]["PAIR"]["status"],"RUNTIME_FAIL")
+        self.assertEqual(completed[0][2],"FAIL")
+        self.assertFalse(result["automatic_promotion"])
+
+    def test_trailing_missing_result_stops_unrecoverable_grid(self):
+        result,completed=self.simulated_report_run(
+            self.good_report(),finder=lambda *a:None,
+        )
+        self.assertEqual(result["status"],"FAIL")
+        self.assertEqual(result["reason"],"RESULT_NOT_FOUND")
+        self.assertEqual(self.target["pipeline_stage"],"INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE")
+        self.assertEqual(self.item["runtime_error"],"RESULT_NOT_FOUND")
+        self.assertEqual(self.item["fine_results"]["PAIR"]["status"],"RESULT_NOT_FOUND")
+        self.assertEqual(completed[0][2],"FAIL")
+        self.assertFalse(result["automatic_promotion"])
 
     def test_trailing_timeout_is_candidate_local_fail_closed(self):
         def run(*args,**kwargs):
