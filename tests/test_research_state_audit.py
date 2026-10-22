@@ -101,6 +101,40 @@ class ResearchAuditTests(unittest.TestCase):
         self.assertNotIn("secret user-token",json.dumps(result))
         self.assertFalse(result["automatic_registration_authorized"])
 
+    def test_concentration_failures_count_versions_vs_unique_families(self):
+        # The same family may fail repeatedly after exact-version redevelopment.
+        rows=[
+            {"eligible":True,"strategy_id":"A","timeframe":"30M",
+             "pipeline_stage":"REDEVELOPMENT_SUPERSEDED_BY_NEW_VERSION",
+             "full_validation_gate":{"pass":False,
+                "absolute_fail_reasons":["FULL_VALIDATION_PROFIT_CONCENTRATION_ABSOLUTE_FAIL"],
+                "metrics":{"top_5pct_trade_net_profit_share":1.25}}},
+            {"eligible":True,"strategy_id":"A","timeframe":"30M",
+             "pipeline_stage":"PERSISTENT_FAIL",
+             "full_validation_gate":{"pass":False,
+                "absolute_fail_reasons":["FULL_VALIDATION_PROFIT_CONCENTRATION_ABSOLUTE_FAIL"],
+                "metrics":{"top_5pct_trade_net_profit_share":0.75}}},
+            {"eligible":True,"strategy_id":"B","timeframe":"6H",
+             "pipeline_stage":"PERSISTENT_FAIL",
+             "full_validation_gate":{"pass":False,
+                "absolute_fail_reasons":["FULL_VALIDATION_PROFIT_CONCENTRATION_ABSOLUTE_FAIL"],
+                "metrics":{"top_5pct_trade_net_profit_share":float("inf")}}},
+            {"eligible":True,"strategy_id":"C","timeframe":"1D",
+             "pipeline_stage":"FULL_VALIDATION_PENDING",
+             "full_validation_gate":{"pass":True,"metrics":{"top_5pct_trade_net_profit_share":0.60}}},
+        ]
+        original=json.dumps(rows,sort_keys=True)
+        result=mod.summarize({"entries":rows},{"entries":{}})
+        self.assertEqual(result["profit_concentration_failed_exact_versions"],3)
+        self.assertEqual(result["profit_concentration_failed_unique_strategy_families"],2)
+        self.assertEqual(result["profit_concentration_failures_by_timeframe"],
+                         {"30M":2,"6H":1})
+        self.assertEqual(result["profit_concentration_failures_by_band"],
+                         {"MISSING_OR_NONFINITE":1,"OVER_1P00_TO_1P50":1,
+                          "OVER_LIMIT_TO_0P90":1})
+        self.assertFalse(result["automatic_registration_authorized"])
+        self.assertEqual(json.dumps(rows,sort_keys=True),original)
+
     def test_corrupted_part_rejected(self):
         raw=b"not really a zip"
         part=[{"name":"checkpoint.part0000","bytes":len(raw),
