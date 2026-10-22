@@ -83,7 +83,8 @@ class ResearchAuditTests(unittest.TestCase):
                                          "FINAL_RISK_WF_OOS_NONPOSITIVE"]}},
             {"eligible":True,"pipeline_stage":"FULL_VALIDATION_PENDING",
              "final_risk_gate":{"pass":True,"decision":"PASS"},
-             "full_validation_gate":{"pass":False,"absolute_fail_reasons":["INTERNAL"]}},
+             "full_validation_gate":{"pass":False,"absolute_fail_reasons":[
+                 "FULL_VALIDATION_REGIME_TOTAL_COLLAPSE","INTERNAL"]}},
         ]
         result=mod.summarize({"entries":rows},{"entries":{}})
         self.assertEqual(result["one_time_reassessed_stages"],
@@ -94,6 +95,9 @@ class ResearchAuditTests(unittest.TestCase):
                          {"FINAL_RISK_WF_OOS_NONPOSITIVE":1,"OTHER_OR_UNRECORDED":1})
         self.assertEqual(result["full_validation_gate_outcomes"],
                          {"FAIL_OR_INCOMPLETE":1})
+        self.assertEqual(result["full_validation_absolute_failure_counts"],
+                         {"FULL_VALIDATION_REGIME_TOTAL_COLLAPSE":1,
+                          "OTHER_OR_UNRECORDED":1})
         self.assertNotIn("secret user-token",json.dumps(result))
         self.assertFalse(result["automatic_registration_authorized"])
 
