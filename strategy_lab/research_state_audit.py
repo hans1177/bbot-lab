@@ -53,6 +53,20 @@ FINAL_RISK_REASON_CODES={
  "FINAL_RISK_LONG_SHORT_BOTH_NONPOSITIVE",
  "FINAL_RISK_LONG_COLLAPSE","FINAL_RISK_SHORT_COLLAPSE",
 }
+FULL_VALIDATION_REASON_CODES={
+ "FULL_VALIDATION_WF_OOS_NONPOSITIVE",
+ "FULL_VALIDATION_COST_STRESS_2X_NONPOSITIVE",
+ "FULL_VALIDATION_MINIMUM_TRADES_FAIL",
+ "FULL_VALIDATION_FINAL_RISK_NOT_PASSED",
+ "FULL_VALIDATION_ROBUSTNESS_ABSOLUTE_FAIL",
+ "FULL_VALIDATION_PROFIT_CONCENTRATION_MISSING",
+ "FULL_VALIDATION_PROFIT_CONCENTRATION_ABSOLUTE_FAIL",
+ "FULL_VALIDATION_REGIME_TOTAL_COLLAPSE",
+ "FULL_VALIDATION_PARAMETER_STABILITY_MISSING",
+ "FULL_VALIDATION_NEIGHBOR_PARAMETER_COLLAPSE",
+ "FULL_VALIDATION_LONG_SHORT_BOTH_NONPOSITIVE",
+ "FULL_VALIDATION_LONG_SHORT_COLLAPSE",
+}
 KNOWN_STAGES={"HARD_PASS_RECHECK_PENDING","HARD_PASS_RECHECK_FAIL",
  "INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING","INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE",
  "REENTRY_RESEARCH_PENDING","REENTRY_RESEARCH_INCOMPLETE",
@@ -116,7 +130,8 @@ def summarize(stage2,stage3,selection_preview=None):
     baseline_failures=Counter();alternative_eligibility=Counter()
     strict_outcomes=Counter();reassessed_stages=Counter()
     risk_gate_outcomes=Counter();risk_gate_failures=Counter()
-    full_gate_outcomes=Counter();blind_gate_outcomes=Counter()
+    full_gate_outcomes=Counter();full_gate_failures=Counter()
+    blind_gate_outcomes=Counter()
     for target in targets:
         if not isinstance(target,dict) or target.get("eligible") is not True:
             continue
@@ -130,11 +145,13 @@ def summarize(stage2,stage3,selection_preview=None):
             gate=target.get(field)
             if isinstance(gate,dict) and gate:
                 counter["PASS" if gate.get("pass") is True else "FAIL_OR_INCOMPLETE"]+=1
-                if field=="final_risk_gate" and gate.get("pass") is not True:
+                if gate.get("pass") is not True and field in ("final_risk_gate","full_validation_gate"):
                     raw=gate.get("absolute_fail_reasons") or []
+                    allowed=FINAL_RISK_REASON_CODES if field=="final_risk_gate" else FULL_VALIDATION_REASON_CODES
+                    counter_fail=risk_gate_failures if field=="final_risk_gate" else full_gate_failures
                     if isinstance(raw,list):
                         for reason in set(v for v in raw if isinstance(v,str)):
-                            risk_gate_failures[_label(reason,FINAL_RISK_REASON_CODES)]+=1
+                            counter_fail[_label(reason,allowed)]+=1
         if stage not in ("INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING",
                          "INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE"):
             continue
@@ -229,6 +246,7 @@ def summarize(stage2,stage3,selection_preview=None):
       "final_risk_gate_outcomes":dict(sorted(risk_gate_outcomes.items())),
       "final_risk_absolute_failure_counts":dict(sorted(risk_gate_failures.items())),
       "full_validation_gate_outcomes":dict(sorted(full_gate_outcomes.items())),
+      "full_validation_absolute_failure_counts":dict(sorted(full_gate_failures.items())),
       "blind_gate_outcomes_without_sealed_details":dict(sorted(blind_gate_outcomes.items())),
       "trailing_item_statuses":dict(sorted(item_states.items())),
       "trailing_pair_work":dict(sorted(pair_states.items())),
