@@ -120,6 +120,17 @@ def _load_pure_trailing_selector(constitution_file=None):
     return namespace["_individual_trailing_select"]
 
 
+def _concentration_band(value):
+    """Aggregate signed profit concentration; never export trade-level values."""
+    ratio=_metric({"concentration":value},"concentration")
+    if ratio is None:return "MISSING_OR_NONFINITE"
+    if ratio<=0.70:return "AT_OR_BELOW_EXISTING_LIMIT"
+    if ratio<=0.90:return "OVER_LIMIT_TO_0P90"
+    if ratio<=1.00:return "OVER_0P90_TO_1P00"
+    if ratio<=1.50:return "OVER_1P00_TO_1P50"
+    return "OVER_1P50"
+
+
 def summarize(stage2,stage3,selection_preview=None):
     targets=stage2.get("entries") if isinstance(stage2,dict) else None
     items=stage3.get("entries") if isinstance(stage3,dict) else None
@@ -132,6 +143,8 @@ def summarize(stage2,stage3,selection_preview=None):
     risk_gate_outcomes=Counter();risk_gate_failures=Counter()
     full_gate_outcomes=Counter();full_gate_failures=Counter()
     blind_gate_outcomes=Counter()
+    concentration_bands=Counter();concentration_timeframes=Counter()
+    concentration_strategy_families=set();concentration_versions=0
     for target in targets:
         if not isinstance(target,dict) or target.get("eligible") is not True:
             continue
@@ -144,6 +157,20 @@ def summarize(stage2,stage3,selection_preview=None):
                               ("sealed_final_blind_gate",blind_gate_outcomes)):
             gate=target.get(field)
             if isinstance(gate,dict) and gate:
+                if field=="full_validation_gate" and gate.get("pass") is not True:
+                    failures=gate.get("absolute_fail_reasons") or []
+                    if isinstance(failures,list) and "FULL_VALIDATION_PROFIT_CONCENTRATION_ABSOLUTE_FAIL" in failures:
+                        concentration_versions+=1
+                        family=target.get("strategy_id")
+                        if isinstance(family,str) and family:
+                            concentration_strategy_families.add(family)
+                        concentration_bands[_concentration_band(
+                            (gate.get("metrics") or {}).get("top_5pct_trade_net_profit_share")
+                        )]+=1
+                        timeframe=str(target.get("timeframe") or "").upper()
+                        concentration_timeframes[
+                            timeframe if timeframe in MIN_TRADES else "OTHER_OR_UNRECORDED"
+                        ]+=1
                 counter["PASS" if gate.get("pass") is True else "FAIL_OR_INCOMPLETE"]+=1
                 if gate.get("pass") is not True and field in ("final_risk_gate","full_validation_gate"):
                     raw=gate.get("absolute_fail_reasons") or []
@@ -247,6 +274,10 @@ def summarize(stage2,stage3,selection_preview=None):
       "final_risk_absolute_failure_counts":dict(sorted(risk_gate_failures.items())),
       "full_validation_gate_outcomes":dict(sorted(full_gate_outcomes.items())),
       "full_validation_absolute_failure_counts":dict(sorted(full_gate_failures.items())),
+      "profit_concentration_failures_by_band":dict(sorted(concentration_bands.items())),
+      "profit_concentration_failures_by_timeframe":dict(sorted(concentration_timeframes.items())),
+      "profit_concentration_failed_exact_versions":concentration_versions,
+      "profit_concentration_failed_unique_strategy_families":len(concentration_strategy_families),
       "blind_gate_outcomes_without_sealed_details":dict(sorted(blind_gate_outcomes.items())),
       "trailing_item_statuses":dict(sorted(item_states.items())),
       "trailing_pair_work":dict(sorted(pair_states.items())),
