@@ -324,6 +324,26 @@ class CloudCheckpointTests(unittest.TestCase):
         with zipfile.ZipFile(p,'a') as z:z.writestr('../outside','bad')
         receipt=json.loads((folder/'CHECKPOINT.json').read_text());receipt['archive_sha256']=hashlib.sha256(p.read_bytes()).hexdigest();(folder/'CHECKPOINT.json').write_text(json.dumps(receipt))
         with self.assertRaisesRegex(RuntimeError,'CHECKPOINT_FILE_SET_MISMATCH'):self.run_step('Restore exact research state')
+    def test_private_feedback_and_runtime_handoff_never_run_in_public_research(self):
+        steps=WORKFLOW['jobs']['research']['steps']
+        by_name={step.get('name'):step for step in steps}
+        feedback=by_name['Read fresh server market feedback']
+        release=by_name['Existing canonical shadow and release validation']
+        handoff=by_name['Prepare runtime candidate handoff']
+        for step in (feedback,release,handoff):
+            self.assertIn('github.event.repository.private == true',step['if'])
+        self.assertEqual(feedback['id'],'private_feedback')
+        self.assertEqual(release['id'],'private_release_validation')
+        self.assertIn("steps.research.outcome == 'success'",feedback['if'])
+        self.assertIn("steps.private_feedback.outcome == 'success'",release['if'])
+        self.assertIn("steps.private_release_validation.outcome == 'success'",handoff['if'])
+        # Saving verified research evidence remains unconditional on private feedback.
+        save=by_name['Preserve research checkpoint']
+        upload=by_name['Upload verified research checkpoint']
+        self.assertIn('always()',save['if'])
+        self.assertNotIn('github.event.repository.private',save['if'])
+        self.assertIn("steps.checkpoint.outcome == 'success'",upload['if'])
+
     def test_workflow_has_one_worker_and_no_checkout_credentials(self):
         self.assertFalse(WORKFLOW['concurrency']['cancel-in-progress'])
         job=WORKFLOW['jobs']['research'];self.assertLessEqual(job['timeout-minutes'],350)
