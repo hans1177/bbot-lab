@@ -30,6 +30,25 @@ class ResearchAuditTests(unittest.TestCase):
             self.assertEqual(json.loads(z.read("wanted.json")),{"v":1})
         self.assertEqual(set(called),{"checkpoint.part0000"})
 
+    def test_negative_baseline_counts_positive_alternative_without_approval(self):
+        base={"status":"MEASURED","evidence":{
+            "trades":45,"walk_forward_oos_expectancy_pct":-0.1,
+            "cost_stress_2x_expectancy_pct":-0.2}}
+        other={"status":"MEASURED","evidence":{
+            "trades":45,"walk_forward_oos_expectancy_pct":0.2,
+            "cost_stress_2x_expectancy_pct":0.1}}
+        state={"entries":[{"eligible":True,"timeframe":"30M",
+             "pipeline_stage":"INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE",
+             "canonical_identity_key":"x"}]}
+        stage3={"entries":{"x":{"coarse_results":{"3.0000|1.5000":base,
+                                             "4.0000|1.5000":other}}}}
+        result=mod.summarize(state,stage3)
+        self.assertEqual(result["baseline_failure_checks"],{
+            "BASELINE_WF_NONPOSITIVE":1,"BASELINE_STRESS_NONPOSITIVE":1})
+        self.assertEqual(result["eligible_alternative_counts"],{
+            "AT_LEAST_ONE_MEASURABLE_ELIGIBLE_ALTERNATIVE":1})
+        self.assertFalse(result["automatic_registration_authorized"])
+
     def test_corrupted_part_rejected(self):
         raw=b"not really a zip"
         part=[{"name":"checkpoint.part0000","bytes":len(raw),
@@ -50,6 +69,8 @@ class ResearchAuditTests(unittest.TestCase):
                                  "coarse_results":{"3.0":{"status":"MEASURED"}}}}}
         result=mod.summarize(stage2,stage3)
         self.assertEqual(result["trailing_incomplete_reasons"],{"OTHER_OR_UNRECORDED":1})
+        self.assertEqual(result["baseline_failure_checks"],{"BASELINE_NOT_MEASURED":1})
+        self.assertEqual(result["eligible_alternative_counts"],{"NO_ELIGIBLE_ALTERNATIVE":1})
         self.assertEqual(result["stage_counts"]["FULL_VALIDATION_PENDING"],1)
         self.assertEqual(result["trailing_pair_work"]["coarse:MEASURED"],1)
         self.assertNotIn("secret",json.dumps(result))
