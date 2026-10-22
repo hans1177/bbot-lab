@@ -2,6 +2,7 @@
 import ast
 import unittest
 from pathlib import Path
+from typing import Any
 
 SOURCE=Path(__file__).resolve().parents[1]/"strategy_lab/v3_policy_research.py"
 FUNCTIONS={"_metric","_measured_trailing_rows","_trailing_row_eligible",
@@ -11,7 +12,7 @@ POLICY={"baseline":{"start_pct":3.0,"callback_pct":1.5},
 tree=ast.parse(SOURCE.read_text(encoding="utf-8-sig"))
 nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in FUNCTIONS]
 assert {n.name for n in nodes}==FUNCTIONS
-ns={"_individual_trailing_contract":lambda:POLICY}
+ns={"Any":Any,"_individual_trailing_contract":lambda:POLICY}
 exec(compile(ast.Module(body=nodes,type_ignores=[]),str(SOURCE),"exec"),ns)
 
 def measured(start,callback,wf,stress,payoff=2.0,trades=45):
