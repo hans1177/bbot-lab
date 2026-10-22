@@ -916,6 +916,61 @@ def _reassess_invalid_baseline_frozen_one(state):
     return None
 
 
+_REDEVELOPMENT_TRAILING_NEIGHBOR_CONTRACT="REDEVELOPMENT_FROZEN_NEIGHBOR_STABILITY_V1"
+
+
+def _redevelopment_stability_neighbors(start,callback):
+    """Deterministic, bounded exact-version local parameter sensitivity plan."""
+    out={}
+    for ss,cc in (
+        (start-0.5,callback),(start+0.5,callback),
+        (start,callback-0.25),(start,callback+0.25),
+    ):
+        if not (1.0<=ss<=6.0 and 0.5<=cc<=3.0 and cc<ss):
+            continue
+        pair={"start_pct":float(round(ss,8)),"callback_pct":float(round(cc,8))}
+        out[_trailing_pair_key(pair["start_pct"],pair["callback_pct"])]=pair
+    out.pop(_trailing_pair_key(start,callback),None)
+    return [out[key] for key in sorted(out)]
+
+
+def _redevelopment_stability_summary(center,neighbors,minimum_trades):
+    """No stability proof without 3+ source-bound measured trials.
+
+    Same positive OOS, stressed expectancy, and minimum-trades predicate as
+    canonical frozen-grid selection. Never manufacture neighbor evidence.
+    """
+    rows=[center]+list(neighbors)
+    if len(rows)<3 or any(not isinstance(row,dict) or row.get("status")!="MEASURED" for row in rows):
+        return {"pass":False,"positive_neighbor_ratio":None,"reason":"REDEVELOPMENT_NEIGHBORS_NOT_MEASURED"}
+    positives=sum(bool(policy_research._trailing_row_eligible(row,minimum_trades)) for row in rows)
+    ratio=positives/float(len(rows))
+    if not policy_research._trailing_row_eligible(center,minimum_trades) or ratio<0.70-1e-12:
+        return {"pass":False,"positive_neighbor_ratio":ratio,"reason":"REDEVELOPMENT_TRAILING_NEIGHBOR_NONROBUST"}
+    return {"pass":True,"positive_neighbor_ratio":ratio,"reason":"MEASURED_ROBUST_LOCAL_NEIGHBORS"}
+
+
+def _block_redevelopment_stability(state,target,stage3,item,reason):
+    target["pipeline_stage"]="INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE"
+    target["last_error"]=reason
+    target["direct_canary_allowed"]=False
+    target["last_checked_at"]=now()
+    item["status"]="INCOMPLETE"
+    item["stability_error"]=reason
+    item["last_checked_at"]=now()
+    _save_historical_stage2(state)
+    atomic(TRAILING_STAGE3,stage3)
+    knowledge.record_result(
+        f"pipeline_trailing_stability:{target.get('strategy_id')}:{target.get('timeframe')}:{target.get('exact_strategy_version')}",
+        {"strategy_id":target.get("strategy_id"),"exact_strategy_version":target.get("exact_strategy_version"),
+         "reason":reason,"pipeline_stage":target["pipeline_stage"],
+         "automatic_promotion":False,"canary_eligible":False},
+        failed=True,
+    )
+    return {"status":"FAIL","reason":reason,"pipeline_stage":target["pipeline_stage"],
+            "automatic_promotion":False,"orders_touched":False}
+
+
 def run_individual_trailing_one():
     state=load(HISTORICAL_STAGE2,{})
     frozen=_reassess_invalid_baseline_frozen_one(state)
@@ -953,13 +1008,57 @@ def run_individual_trailing_one():
             report_source=ROOT/report_source
         if not report.get("strategy_file") or report_source.resolve()!=source.resolve():
             return {"status":"FAIL","reason":"REDEVELOPMENT_TRAILING_RESULT_SOURCE_MISMATCH","automatic_promotion":False}
+        # A single measured override cannot establish the parameter stability
+        # required by FULL_VALIDATION. Measure bounded neighbors of this exact
+        # source/version on the same HARD_PASS_ONLY window, then authenticate.
+        plan=_redevelopment_stability_neighbors(start,callback)
+        if len(plan)<2:
+            return _block_redevelopment_stability(state,override_target,stage3,item,"REDEVELOPMENT_STABILITY_PLAN_EMPTY")
+        existing=item.get("redevelopment_stability_candidates")
+        if existing is None:
+            item["redevelopment_stability_candidates"]=plan
+            item["fine_candidates"]=list(plan)
+            item.setdefault("fine_results",{})
+            item["redevelopment_stability_contract"]=_REDEVELOPMENT_TRAILING_NEIGHBOR_CONTRACT
+            atomic(TRAILING_STAGE3,stage3)
+        elif (existing!=plan or item.get("fine_candidates")!=plan
+              or item.get("redevelopment_stability_contract")!=_REDEVELOPMENT_TRAILING_NEIGHBOR_CONTRACT):
+            return _block_redevelopment_stability(state,override_target,stage3,item,"REDEVELOPMENT_STABILITY_PLAN_DRIFT")
+        measured=item.get("fine_results") or {}
+        if not isinstance(measured,dict):
+            return _block_redevelopment_stability(state,override_target,stage3,item,"REDEVELOPMENT_STABILITY_RESULTS_INVALID")
+        for neighbor in plan:
+            if _trailing_pair_key(neighbor["start_pct"],neighbor["callback_pct"]) not in measured:
+                item["status"]="FINE_RUNNING"
+                return _run_trailing_pair(state,override_target,stage3,item,neighbor,"FINE")
+        frozen={
+            "coarse_candidates":[pair],"coarse_results":{key:row},
+            "fine_candidates":plan,"fine_results":measured,
+        }
+        integrity_error=_trailing_frozen_results_error(override_target,frozen)
+        if integrity_error:
+            return _block_trailing_source_drift(state,override_target,stage3,item,integrity_error)
+        summary=_redevelopment_stability_summary(
+            row,
+            [measured[_trailing_pair_key(x["start_pct"],x["callback_pct"])] for x in plan],
+            MIN_TRADES.get(str(override_target.get("timeframe") or "").upper(),1),
+        )
+        item["redevelopment_stability_summary"]=summary
+        if not summary["pass"]:
+            return _block_redevelopment_stability(state,override_target,stage3,item,summary["reason"])
         override_target["individual_trailing"]={**pair,"fallback":False,"redevelopment_override":True}
-        override_target["individual_trailing_selection"]={"status":"SELECTED","reason":"TARGETED_FINAL_RISK_REDEVELOPMENT_MEASURED","selected":dict(override_target["individual_trailing"]),"fallback":False,"result_json":result_rel}
+        override_target["individual_trailing_selection"]={
+            "status":"SELECTED","reason":"TARGETED_FINAL_RISK_REDEVELOPMENT_MEASURED_AND_STABLE",
+            "selected":dict(override_target["individual_trailing"]),"fallback":False,
+            "result_json":result_rel,
+            "positive_neighbor_ratio":summary["positive_neighbor_ratio"],
+            "stability_contract":_REDEVELOPMENT_TRAILING_NEIGHBOR_CONTRACT,
+        }
         item["selected"]=dict(override_target["individual_trailing"])
         item["status"]="SELECTED"; item["last_checked_at"]=now()
         atomic(TRAILING_STAGE3,stage3)
         override_target["pipeline_stage"]="REENTRY_RESEARCH_PENDING"; override_target["last_checked_at"]=now(); _save_historical_stage2(state)
-        return {"status":"COMPLETE","strategy_id":override_target.get("strategy_id"),"exact_strategy_version":override_target.get("exact_strategy_version"),"timeframe":override_target.get("timeframe"),"pipeline_stage":"REENTRY_RESEARCH_PENDING","individual_trailing":override_target.get("individual_trailing"),"selection_status":"SELECTED","selection_reason":"TARGETED_FINAL_RISK_REDEVELOPMENT_MEASURED","automatic_promotion":False}
+        return {"status":"COMPLETE","strategy_id":override_target.get("strategy_id"),"exact_strategy_version":override_target.get("exact_strategy_version"),"timeframe":override_target.get("timeframe"),"pipeline_stage":"REENTRY_RESEARCH_PENDING","individual_trailing":override_target.get("individual_trailing"),"selection_status":"SELECTED","selection_reason":"TARGETED_FINAL_RISK_REDEVELOPMENT_MEASURED_AND_STABLE","automatic_promotion":False}
     targets=[
         x for x in (state.get("entries") or [])
         if isinstance(x,dict)
