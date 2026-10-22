@@ -380,18 +380,25 @@ jobs:
           if any(reason in {'RUN_STRATEGY_FAIL','RESULT_NOT_FOUND'} for row in rows for reason in reasons(row)):raise RuntimeError('RESEARCH_EXECUTION_FAILED_CHECK_PRIVATE_EVIDENCE')
           print('RESEARCH_EXECUTION_AND_RESULTS_RECORDED; STRATEGY_QUALIFICATION_IS_SEPARATE')
           PY
+      # The runtime feedback source enforces PRIVATE_FEEDBACK_REPOSITORY_REQUIRED.
+      # Public training can compute and checkpoint, but it cannot claim that
+      # private server feedback, shadow verification or release has succeeded.
       - name: Read fresh server market feedback
+        id: private_feedback
+        if: github.event.repository.private == true && steps.research.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           RUNNER_DRY_RUN: '1'
         run: python "$BBOT_LOCAL_ROOT/strategy_lab/v3_auto_runtime_release.py" --pull-runtime-feedback
       - name: Existing canonical shadow and release validation
+        id: private_release_validation
+        if: github.event.repository.private == true && steps.private_feedback.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           RUNNER_DRY_RUN: '1'
         run: python "$BBOT_LOCAL_ROOT/strategy_lab/v3_auto_runtime_release.py" --cloud-validation
       - name: Prepare runtime candidate handoff
-        if: steps.research.outcome == 'success'
+        if: github.event.repository.private == true && steps.research.outcome == 'success' && steps.private_feedback.outcome == 'success' && steps.private_release_validation.outcome == 'success'
         shell: python
         run: |
           import os,sys,json
