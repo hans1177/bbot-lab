@@ -41,6 +41,18 @@ KNOWN_REASONS={
 KNOWN_ITEM_STATUSES={"COARSE_PENDING","COARSE_RUNNING","FINE_PENDING","FINE_RUNNING",
  "INCOMPLETE","COMPLETE","SELECTED","UNKNOWN"}
 KNOWN_PAIR_STATUSES={"MEASURED","RUNTIME_FAIL","RESULT_NOT_FOUND","INVALID_RESULT_BINDING"}
+FINAL_RISK_REASON_CODES={
+ "FINAL_RISK_HARD_PASS_BASELINE_MISSING",
+ "FINAL_RISK_WF_OOS_NONPOSITIVE",
+ "FINAL_RISK_COST_STRESS_2X_NONPOSITIVE",
+ "FINAL_RISK_MDD_MISSING","FINAL_RISK_MDD_ABSOLUTE_FAIL",
+ "FINAL_RISK_DD_DURATION_MISSING","FINAL_RISK_DD_DURATION_ABSOLUTE_FAIL",
+ "FINAL_RISK_CVAR95_MISSING","FINAL_RISK_CVAR95_ABSOLUTE_FAIL",
+ "FINAL_RISK_HOLDING_MISSING","FINAL_RISK_HOLDING_ABSOLUTE_FAIL",
+ "FINAL_RISK_LOSS_STREAK_ABSOLUTE_FAIL",
+ "FINAL_RISK_LONG_SHORT_BOTH_NONPOSITIVE",
+ "FINAL_RISK_LONG_COLLAPSE","FINAL_RISK_SHORT_COLLAPSE",
+}
 KNOWN_STAGES={"HARD_PASS_RECHECK_PENDING","HARD_PASS_RECHECK_FAIL",
  "INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING","INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE",
  "REENTRY_RESEARCH_PENDING","REENTRY_RESEARCH_INCOMPLETE",
@@ -102,12 +114,27 @@ def summarize(stage2,stage3,selection_preview=None):
     stages=Counter(); reasons=Counter(); item_states=Counter(); pair_states=Counter()
     waiting=Counter(); incomplete=Counter()
     baseline_failures=Counter();alternative_eligibility=Counter()
-    strict_outcomes=Counter()
+    strict_outcomes=Counter();reassessed_stages=Counter()
+    risk_gate_outcomes=Counter();risk_gate_failures=Counter()
+    full_gate_outcomes=Counter();blind_gate_outcomes=Counter()
     for target in targets:
         if not isinstance(target,dict) or target.get("eligible") is not True:
             continue
         stage=_label(target.get("pipeline_stage"),KNOWN_STAGES)
         stages[stage]+=1
+        if target.get("trailing_selection_reassessment_contract")=="MEASURED_BASELINE_ROBUST_ALTERNATIVE_V1":
+            reassessed_stages[stage]+=1
+        for field,counter in (("final_risk_gate",risk_gate_outcomes),
+                              ("full_validation_gate",full_gate_outcomes),
+                              ("sealed_final_blind_gate",blind_gate_outcomes)):
+            gate=target.get(field)
+            if isinstance(gate,dict) and gate:
+                counter["PASS" if gate.get("pass") is True else "FAIL_OR_INCOMPLETE"]+=1
+                if field=="final_risk_gate" and gate.get("pass") is not True:
+                    raw=gate.get("absolute_fail_reasons") or []
+                    if isinstance(raw,list):
+                        for reason in set(v for v in raw if isinstance(v,str)):
+                            risk_gate_failures[_label(reason,FINAL_RISK_REASON_CODES)]+=1
         if stage not in ("INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING",
                          "INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE"):
             continue
@@ -198,6 +225,11 @@ def summarize(stage2,stage3,selection_preview=None):
       "baseline_failure_checks":dict(sorted(baseline_failures.items())),
       "eligible_alternative_counts":dict(sorted(alternative_eligibility.items())),
       "strict_selector_preview_not_certification":dict(sorted(strict_outcomes.items())),
+      "one_time_reassessed_stages":dict(sorted(reassessed_stages.items())),
+      "final_risk_gate_outcomes":dict(sorted(risk_gate_outcomes.items())),
+      "final_risk_absolute_failure_counts":dict(sorted(risk_gate_failures.items())),
+      "full_validation_gate_outcomes":dict(sorted(full_gate_outcomes.items())),
+      "blind_gate_outcomes_without_sealed_details":dict(sorted(blind_gate_outcomes.items())),
       "trailing_item_statuses":dict(sorted(item_states.items())),
       "trailing_pair_work":dict(sorted(pair_states.items())),
       "missing_entries":dict(sorted((waiting+incomplete).items())),
