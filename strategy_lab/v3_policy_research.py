@@ -550,7 +550,17 @@ def _individual_trailing_select(context) -> dict[str, Any]:
         if abs(row["start_pct"]-float(baseline_cfg.get("start_pct",3.0))) < 1e-12 and abs(row["callback_pct"]-float(baseline_cfg.get("callback_pct",1.5))) < 1e-12:
             baseline = row
             break
-    if baseline is None or not _trailing_row_eligible(baseline, minimum_trades):
+    # The baseline is a measured comparison CONTROL, not the sole allowed
+    # policy. An unprofitable measured baseline must never be selected as a
+    # fallback, but it must not preclude a separately robust and profitable
+    # trailing alternative from the already-frozen grid.
+    base_ev = (baseline or {}).get("evidence") or {}
+    base_wf = _metric(base_ev, "walk_forward_oos_expectancy_pct")
+    try:
+        baseline_trades=int(base_ev.get("trades") or 0)
+    except (TypeError,ValueError,OverflowError):
+        baseline_trades=0
+    if baseline is None or baseline_trades<minimum_trades or base_wf is None:
         return {
             "status":"INCOMPLETE",
             "selected":None,
@@ -558,9 +568,7 @@ def _individual_trailing_select(context) -> dict[str, Any]:
             "reason":"BASELINE_3_0_1_5_NOT_MEASURED_OR_INVALID",
             "live_effect":False,
         }
-
-    base_ev = baseline.get("evidence") or {}
-    base_wf = _metric(base_ev, "walk_forward_oos_expectancy_pct")
+    baseline_eligible=_trailing_row_eligible(baseline,minimum_trades)
     candidates = []
     for row in rows:
         if not _trailing_row_eligible(row, minimum_trades):
@@ -614,6 +622,16 @@ def _individual_trailing_select(context) -> dict[str, Any]:
         })
 
     if not candidates:
+        if not baseline_eligible:
+            # Fail closed: an invalid baseline cannot be silently promoted.
+            return {
+                "status":"INCOMPLETE",
+                "selected":None,
+                "fallback":baseline_cfg,
+                "reason":"INVALID_BASELINE_NO_ROBUST_VALID_ALTERNATIVE",
+                "baseline_evidence":base_ev,
+                "live_effect":False,
+            }
         return {
             "status":"FALLBACK",
             "selected":dict(baseline_cfg),

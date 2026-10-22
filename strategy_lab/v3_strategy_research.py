@@ -827,6 +827,7 @@ def _finalize_trailing_selection(state,target,stage3,item):
     item["selection"]=selection
     item["status"]="COMPLETE" if selection.get("status") in {"SELECTED","FALLBACK"} else "INCOMPLETE"
     if item["status"]=="COMPLETE":
+        target.pop("last_error",None)
         selected=selection.get("selected") or {"start_pct":3.0,"callback_pct":1.5}
         item["selected"]={
             "start_pct":float(selected.get("start_pct",3.0)),
@@ -870,8 +871,55 @@ def _finalize_trailing_selection(state,target,stage3,item):
     }
 
 
+_FROZEN_TRAILING_REASSESSMENT_CONTRACT="MEASURED_BASELINE_ROBUST_ALTERNATIVE_V1"
+
+
+def _reassess_invalid_baseline_frozen_one(state):
+    """One-time strict reevaluation of existing measured grids, never new trials.
+
+    The legacy selector marked a measured but nonpositive comparison baseline
+    INCOMPLETE before inspecting independently eligible robust alternatives.
+    Preserve the sealed grid; use the existing exact-source/hash/report guard.
+    No fallback to a losing baseline, no new candidate, no release authority.
+    """
+    stage3=load(TRAILING_STAGE3,{})
+    items=stage3.get("entries") if isinstance(stage3,dict) else None
+    if not isinstance(items,dict):
+        return None
+    reason="BASELINE_3_0_1_5_NOT_MEASURED_OR_INVALID"
+    for target in state.get("entries") or []:
+        if (not isinstance(target,dict) or target.get("eligible") is not True
+            or target.get("pipeline_stage")!="INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE"
+            or target.get("trailing_selection_reassessment_contract")==_FROZEN_TRAILING_REASSESSMENT_CONTRACT
+            or target.get("last_error") not in (None,"",reason)):
+            continue
+        identity=str(target.get("canonical_identity_key") or "")
+        item=items.get(identity)
+        if not isinstance(item,dict) or item.get("status")!="INCOMPLETE":
+            continue
+        selection=item.get("selection") or {}
+        if not isinstance(selection,dict) or selection.get("reason")!=reason:
+            continue
+        target["trailing_selection_reassessment_contract"]=_FROZEN_TRAILING_REASSESSMENT_CONTRACT
+        target["trailing_selection_previous_reason"]=reason
+        target["direct_canary_allowed"]=False
+        _save_historical_stage2(state)
+        outcome=_finalize_trailing_selection(state,target,stage3,item)
+        return {
+            "action":"TRAILING_FROZEN_GRID_REASSESSMENT",
+            "status":outcome.get("status"),
+            "reason":outcome.get("selection_reason") or outcome.get("reason"),
+            "pipeline_stage":target.get("pipeline_stage"),
+            "automatic_promotion":False,
+            "orders_touched":False,
+        }
+    return None
+
+
 def run_individual_trailing_one():
     state=load(HISTORICAL_STAGE2,{})
+    frozen=_reassess_invalid_baseline_frozen_one(state)
+    if frozen is not None:return frozen
     override_target=next((x for x in (state.get("entries") or []) if isinstance(x,dict) and x.get("eligible") is True and x.get("pipeline_stage")=="INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING" and isinstance(x.get("redevelopment_trailing_override"),dict)),None)
     if override_target is not None:
         # 재개발 버전의 선택값도 기존 측정 경로를 거친 뒤 다음 단계로 이동한다.
