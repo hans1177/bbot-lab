@@ -9,6 +9,7 @@ import base64
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import urllib.request
@@ -49,6 +50,23 @@ KNOWN_STAGES={"HARD_PASS_RECHECK_PENDING","HARD_PASS_RECHECK_FAIL",
 def _label(value, known):
     return value if isinstance(value,str) and value in known else "OTHER_OR_UNRECORDED"
 
+MIN_TRADES={"30M":40,"1H":30,"6H":20,"12H":15,"1D":10,"1W":6}
+
+def _metric(evidence,name):
+    try:
+        n=float(evidence.get(name))
+        return n if math.isfinite(n) else None
+    except (ValueError,TypeError,OverflowError):
+        return None
+
+def _eligible_measurement(row,min_trades):
+    if not isinstance(row,dict) or row.get("status")!="MEASURED":
+        return False
+    ev=row.get("evidence") or {}
+    return (int(ev.get("trades") or 0)>=min_trades
+            and (_metric(ev,"walk_forward_oos_expectancy_pct") or 0)>0
+            and (_metric(ev,"cost_stress_2x_expectancy_pct") or 0)>0)
+
 def summarize(stage2,stage3):
     targets=stage2.get("entries") if isinstance(stage2,dict) else None
     items=stage3.get("entries") if isinstance(stage3,dict) else None
@@ -56,6 +74,7 @@ def summarize(stage2,stage3):
         raise ValueError("RESEARCH_STAGE_STRUCTURES_INVALID")
     stages=Counter(); reasons=Counter(); item_states=Counter(); pair_states=Counter()
     waiting=Counter(); incomplete=Counter()
+    baseline_failures=Counter();alternative_eligibility=Counter()
     for target in targets:
         if not isinstance(target,dict) or target.get("eligible") is not True:
             continue
@@ -75,6 +94,34 @@ def summarize(stage2,stage3):
                or item.get("source_integrity_error") or selection.get("reason"))
         if stage.endswith("INCOMPLETE"):
             reasons[_label(cause,KNOWN_REASONS)]+=1
+            coarse=item.get("coarse_results") or {}
+            fine=item.get("fine_results") or {}
+            measured={}
+            if isinstance(coarse,dict):measured.update(coarse)
+            if isinstance(fine,dict):measured.update(fine)
+            baseline=measured.get("3.0000|1.5000")
+            min_trades=MIN_TRADES.get(str(target.get("timeframe") or "").upper(),10**9)
+            if not isinstance(baseline,dict) or baseline.get("status")!="MEASURED":
+                baseline_failures["BASELINE_NOT_MEASURED"]+=1
+            else:
+                ev=baseline.get("evidence") or {}
+                try:trades=int(ev.get("trades") or 0)
+                except (ValueError,TypeError,OverflowError):trades=0
+                if trades<min_trades:baseline_failures["BASELINE_TRADE_COUNT_LOW"]+=1
+                wf=_metric(ev,"walk_forward_oos_expectancy_pct")
+                stress=_metric(ev,"cost_stress_2x_expectancy_pct")
+                if wf is None:baseline_failures["BASELINE_WF_MISSING"]+=1
+                elif wf<=0:baseline_failures["BASELINE_WF_NONPOSITIVE"]+=1
+                if stress is None:baseline_failures["BASELINE_STRESS_MISSING"]+=1
+                elif stress<=0:baseline_failures["BASELINE_STRESS_NONPOSITIVE"]+=1
+            eligible_alts=sum(
+                _eligible_measurement(row,min_trades)
+                for key,row in measured.items() if key!="3.0000|1.5000"
+            )
+            alternative_eligibility[
+                "AT_LEAST_ONE_MEASURABLE_ELIGIBLE_ALTERNATIVE" if eligible_alts else
+                "NO_ELIGIBLE_ALTERNATIVE"
+            ]+=1
         for phase in ("coarse","fine"):
             planned=item.get(phase+"_candidates") or []
             done=item.get(phase+"_results") or {}
@@ -90,6 +137,8 @@ def summarize(stage2,stage3):
       "schema":"B_BOT_PUBLIC_CHECKPOINT_READ_ONLY_AUDIT_V1",
       "stage_counts":dict(sorted(stages.items())),
       "trailing_incomplete_reasons":dict(sorted(reasons.items())),
+      "baseline_failure_checks":dict(sorted(baseline_failures.items())),
+      "eligible_alternative_counts":dict(sorted(alternative_eligibility.items())),
       "trailing_item_statuses":dict(sorted(item_states.items())),
       "trailing_pair_work":dict(sorted(pair_states.items())),
       "missing_entries":dict(sorted((waiting+incomplete).items())),
