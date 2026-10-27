@@ -1,7 +1,7 @@
 {
   "schema": "B_BOT_RESEARCH_CHECKPOINT_V1",
   "release_contract": "FINAL_GATES_THEN_EXISTING_RUNTIME_WORKER_V1",
-  "source_run_id": "40460491037",
+  "source_run_id": "40510545592",
   "source_commit": "60323f09bc62ad35b58b65bfe016f0ee276559c1",
   "engine_sha256": "3c665f886a02757e3b35444b437312385d88790c47c6346e90c64dfc0a5a86ed",
   "input_archives": {
@@ -32845,16 +32845,16 @@
       "sha256": "a96015555e88a24106cc6ed5ae8dd8f2b0aea4eca6b5dc518e2ffd3ab403eeef"
     },
     "strategy_lab/results/v3/historical_314_pipeline_stage2.json": {
-      "bytes": 4550229,
-      "sha256": "c198558ca2b978a6943617420d1d9a80beed9f82415584d8ed737090a20c860a"
+      "bytes": 4550357,
+      "sha256": "807d40011b5f8ffcd542e5b46895ac908e7fb367381235d1228e39cd5820be12"
     },
     "strategy_lab/results/v3/individual_reentry_final_risk_stage4.json": {
       "bytes": 5767490,
       "sha256": "9096aec18256e472a185ffc8207a218a969280d819370001100523e11bee99cd"
     },
     "strategy_lab/results/v3/individual_trailing_stage3.json": {
-      "bytes": 7814885,
-      "sha256": "828b24c5f226a9e7356ecbe55c206f1c62739964778cabead01f2a79788bec6d"
+      "bytes": 7816231,
+      "sha256": "256d156cf3a63c00dd381c5d1469d7d3206bf40e14c0499c3c7b5d05ed755574"
     },
     "strategy_lab/results/v3/redeveloped_strategies/v3_adaptive_channel_rfull_validation_1.py": {
       "bytes": 2954,
@@ -33041,16 +33041,16 @@
       "sha256": "364339388fa92daa031e12431cae19eacccecce2d70368b0af2a699b1075f668"
     },
     "strategy_lab/results/v3/research_knowledge.json": {
-      "bytes": 9845772,
-      "sha256": "be7427851c5095d7f4ad01d269e24486490b98f9fb51110b8786ceb92e3ccb06"
+      "bytes": 9847352,
+      "sha256": "5aae47157862a6bb46a4bff1b43543a5f55cbfb65e59f0f82bd2b0c00ebb8fa1"
     },
     "strategy_lab/results/v3/research_knowledge_runtime.json": {
       "bytes": 1130525,
-      "sha256": "56b0fddc540524d3861b9aadd1d00099658b765df6a8a0022535b43f9c34def6"
+      "sha256": "bdafa9fa92a9079bd95277cb54719aad01326c5eb7ca7a40c872f0e94294b818"
     },
     "strategy_lab/results/v3/roadmap_queue.json": {
-      "bytes": 385978,
-      "sha256": "0602b99494336ffffd14ae0106bc0c32481a40b6023164954219062b21f1dcfa"
+      "bytes": 385982,
+      "sha256": "799b85d274b3960a8c2d3dc2ac5455ce56a2d398f46d4b9775bf266cb574572d"
     },
     "strategy_lab/results/v3/runtime_diagnostics.json": {
       "bytes": 9457,
@@ -33067,7 +33067,7 @@
   },
   "p0_stage_status": {
     "schema": "B_BOT_P0_CHECKPOINT_STAGE_SNAPSHOT_V1",
-    "pipeline_sha256": "c198558ca2b978a6943617420d1d9a80beed9f82415584d8ed737090a20c860a",
+    "pipeline_sha256": "807d40011b5f8ffcd542e5b46895ac908e7fb367381235d1228e39cd5820be12",
     "aws_final_certification": "NOT_VERIFIED_BY_GITHUB_RESEARCH",
     "automatic_registration_authorized": false,
     "leading_exact_version": "EV_55a86e97dfadf81c_30M",
@@ -33075,8 +33075,8 @@
     "status": "RESEARCH_STAGE_ONLY",
     "stage_counts": {
       "HARD_PASS_RECHECK_FAIL": 33,
-      "INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING": 63,
-      "INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE": 50,
+      "INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING": 62,
+      "INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE": 51,
       "PERSISTENT_FAIL": 62,
       "REDEVELOPMENT_SUPERSEDED_BY_NEW_VERSION": 260
     },
@@ -33109,14 +33109,14 @@
       }
     },
     "trailing_blocker_diagnostics": {
-      "source_stage2_sha256": "c198558ca2b978a6943617420d1d9a80beed9f82415584d8ed737090a20c860a",
-      "source_stage3_sha256": "828b24c5f226a9e7356ecbe55c206f1c62739964778cabead01f2a79788bec6d",
+      "source_stage2_sha256": "807d40011b5f8ffcd542e5b46895ac908e7fb367381235d1228e39cd5820be12",
+      "source_stage3_sha256": "256d156cf3a63c00dd381c5d1469d7d3206bf40e14c0499c3c7b5d05ed755574",
       "status": "RESEARCH_BLOCKER_COUNTS_ONLY",
       "reasons": {
-        "OTHER_OR_UNRECORDED": 50
+        "OTHER_OR_UNRECORDED": 51
       }
     }
   },
-  "archive_sha256": "d3a63b47939c204a67f703015efa92ca6c10b5fc9962ed8f86002c5c084f359c",
+  "archive_sha256": "d4b1139c08ae6236fa5cc68239350050d0c7baab5f86cc9e3a9bac1bb9f8b9e7",
   "public_secret_scan": "PASS"
 }
