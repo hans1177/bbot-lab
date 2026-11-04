@@ -66,6 +66,19 @@ class CloudCheckpointTests(unittest.TestCase):
                     hashlib.sha256(archive.read('strategy_lab/results/v3/'+name)).hexdigest(),
                     stats[sha])
 
+    def test_checkpoint_capacity_matches_publisher_and_restorer(self):
+        # Keep original V1 filenames, hashes and legacy 64-part restore compatibility.
+        source=(REPO/'strategy_lab/v3_research_knowledge.py').read_text()
+        download=STEPS['Download checkpoint']['run']
+        self.assertIn('zipfile.ZIP_DEFLATED,compresslevel=6',source)
+        self.assertIn("if len(parts)>=128:raise RuntimeError('CHECKPOINT_TRANSPORT_ARCHIVE_LIMIT')",source)
+        self.assertIn('not 1<=len(parts)<=128',download)
+        self.assertIn('not 0<total<=1024*1024**2',download)
+        self.assertIn("sha.hexdigest()!=receipt.get('archive_sha256')",source)
+        self.assertIn("if digest.hexdigest()!=transport['archive_sha256']",download)
+        self.assertIn("set(entries)!=expected",download)
+        self.assertIn("if parent!=expected:raise RuntimeError('CHECKPOINT_REMOTE_STATE_CHANGED')",source)
+
     def test_large_checkpoint_transport_has_bounded_reupload_frequency(self):
         # Full checkpoints can exceed 300 MiB and 30 Git blobs.
         # The canonical workflow must not try that upload every minute.
