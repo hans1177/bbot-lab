@@ -1694,6 +1694,9 @@ def evaluate_full_validation_gate(target, final_report):
         "compensation_strengths":unique_strengths,
         "minimum_compensation_strength_count":min_strength,
         "metrics":{
+            # Observed gate inputs only; these never affect the pass decision.
+            "walk_forward_oos_expectancy_pct":wf,
+            "cost_stress_2x_expectancy_pct":stress,
             "trades":trades,"positive_robustness_slice_ratio":positive_ratio,
             "positive_robustness_slices":positive_count,"measured_robustness_slices":len(slices),
             "top_5pct_trade_net_profit_share":concentration,
