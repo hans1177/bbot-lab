@@ -108,6 +108,52 @@ class FirstFinalPassReportTests(unittest.TestCase):
         self.assertEqual(self.report()["aws_final_certification"],
                          "NOT_VERIFIED_BY_GITHUB_RESEARCH")
 
+    def test_final_gate_reasons_and_counterfactuals_do_not_approve(self):
+        former=dict(self.trial,pipeline_stage="REDEVELOPMENT_SUPERSEDED_BY_NEW_VERSION",
+                    full_validation_gate={
+                        "pass":False,"decision":"FAIL",
+                        "absolute_fail_reasons":[
+                            "FULL_VALIDATION_COST_STRESS_2X_NONPOSITIVE",
+                            "FULL_VALIDATION_ROBUSTNESS_ABSOLUTE_FAIL"],
+                        "metrics":{"positive_robustness_slice_ratio":0.45,
+                                   "top_5pct_trade_net_profit_share":0.75,
+                                   "cost_stress_2x_expectancy_pct":-0.01}})
+        self.pipeline([former])
+        report=self.report()
+        failures=report["full_validation_failure_diagnostics"]
+        self.assertEqual(failures["reviewed_versions"],1)
+        self.assertEqual(failures["failed_versions"],1)
+        self.assertEqual(failures["failure_families"],
+                         {"COST":1,"OVERFIT_OR_CONCENTRATION":1})
+        cf=report["threshold_sensitivity_observation_only"]
+        self.assertEqual(cf["positive_robustness_slice_ratio"],
+                         {"measured":1,"violations_min_40pct":0,
+                          "violations_current_min_50pct":1,
+                          "violations_min_60pct":1})
+        self.assertEqual(cf["top_5pct_trade_profit_share"],
+                         {"measured":1,"violations_max_60pct":1,
+                          "violations_current_max_70pct":1,
+                          "violations_max_80pct":0})
+        self.assertEqual(cf["cost_stress_2x"],{"NONPOSITIVE":1})
+        self.assertFalse(cf["policy_changed"])
+        self.assertFalse(cf["sealed_blind_exposure_used"])
+        self.assertTrue(cf["cannot_estimate_combined_gate_pass_from_single_threshold"])
+        self.assertEqual(report["research_full_and_sealed_blind_pass_count"],0)
+
+    def test_missing_historical_gate_metrics_not_fabricated(self):
+        former=dict(self.trial,pipeline_stage="PERSISTENT_FAIL",
+                    full_validation_gate={"pass":False,"decision":"FAIL",
+                                          "absolute_fail_reasons":[]})
+        self.pipeline([former])
+        report=self.report()
+        self.assertEqual(report["full_validation_failure_diagnostics"]["failed_versions"],1)
+        self.assertEqual(report["full_validation_failure_diagnostics"]["failure_families"],
+                         {"NO_ABSOLUTE_REASON_OR_COMPENSATION":1})
+        cf=report["threshold_sensitivity_observation_only"]
+        self.assertEqual(cf["positive_robustness_slice_ratio"]["measured"],0)
+        self.assertEqual(cf["top_5pct_trade_profit_share"]["measured"],0)
+        self.assertEqual(cf["cost_stress_2x"],{"NOT_RECORDED":1})
+
     def test_read_only_inputs_unchanged(self):
         before={p: p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
         self.report()
