@@ -277,7 +277,7 @@ jobs:
                   parts=transport.get('parts')
                   if (transport.get('schema')!='B_BOT_RESEARCH_CHECKPOINT_PARTS_V1'
                       or transport.get('chunk_bytes')!=chunk_bytes
-                      or not isinstance(parts,list) or not 1<=len(parts)<=64
+                      or not isinstance(parts,list) or not 1<=len(parts)<=128
                       or receipt.get('schema')!='B_BOT_RESEARCH_CHECKPOINT_V1'
                       or receipt.get('archive_sha256')!=transport.get('archive_sha256')):
                       raise RuntimeError('STATE_PARTS_MANIFEST_INVALID')
@@ -294,7 +294,7 @@ jobs:
                           raise RuntimeError('STATE_PART_DESCRIPTOR_INVALID')
                       total+=row['bytes'];expected.add(name)
                   if (set(entries)!=expected or transport.get('archive_bytes')!=total
-                      or not 0<total<=512*1024**2):
+                      or not 0<total<=1024*1024**2):
                       raise RuntimeError('STATE_PART_SET_INVALID')
                   digest=hashlib.sha256()
                   (folder/'CHECKPOINT.json').write_bytes(receipt_raw)

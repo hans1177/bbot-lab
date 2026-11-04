@@ -359,7 +359,7 @@ def save_cloud_checkpoint():
     files=[path for path in state.rglob('*') if path.is_file() and path.suffix.lower() in {'.json','.jsonl','.py','.csv','.parquet'} and '__pycache__' not in path.parts]
     if not files:raise RuntimeError('RESEARCH_STATE_NOT_CREATED')
     receipt={'schema':'B_BOT_RESEARCH_CHECKPOINT_V1','release_contract':'FINAL_GATES_THEN_EXISTING_RUNTIME_WORKER_V1','source_run_id':os.environ['GITHUB_RUN_ID'],'source_commit':os.environ['GITHUB_SHA'],'engine_sha256':hashlib.sha256((root/'strategy_lab/run_strategy.py').read_bytes()).hexdigest(),'input_archives':json.loads((root/'INPUT_RECEIPT.json').read_text()),'constitution_sha256':hashlib.sha256((root/'ROADMAP_CONSTITUTION_V3.json').read_bytes()).hexdigest(),'files':{}}
-    with zipfile.ZipFile(out/'checkpoint.zip','w',zipfile.ZIP_DEFLATED,compresslevel=1) as archive:
+    with zipfile.ZipFile(out/'checkpoint.zip','w',zipfile.ZIP_DEFLATED,compresslevel=6) as archive:
         for path in sorted(files):
             if path.is_symlink() or not path.resolve().is_relative_to(state.resolve()):raise RuntimeError('STATE_PATH_FORBIDDEN')
             if path.stat().st_size>512*1024**2:raise RuntimeError('STATE_FILE_TOO_LARGE')
@@ -434,7 +434,7 @@ def publish_cloud_checkpoint(include_candidates=False):
             while True:
                 raw=source.read(chunk_bytes)
                 if not raw:break
-                if len(parts)>=64:raise RuntimeError('CHECKPOINT_TRANSPORT_ARCHIVE_LIMIT')
+                if len(parts)>=128:raise RuntimeError('CHECKPOINT_TRANSPORT_ARCHIVE_LIMIT')
                 index=len(parts)
                 name=f'checkpoint.part{index:04d}'
                 parts.append({'name':name,'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()})
