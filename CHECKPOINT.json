@@ -1,8 +1,8 @@
 {
   "schema": "B_BOT_RESEARCH_CHECKPOINT_V1",
   "release_contract": "FINAL_GATES_THEN_EXISTING_RUNTIME_WORKER_V1",
-  "source_run_id": "41059825421",
-  "source_commit": "60323f09bc62ad35b58b65bfe016f0ee276559c1",
+  "source_run_id": "41778280604",
+  "source_commit": "90809be192de28eb20e36a2baaf481ea64839611",
   "engine_sha256": "3c665f886a02757e3b35444b437312385d88790c47c6346e90c64dfc0a5a86ed",
   "input_archives": {
     "start.zip": "ace276261e768dbcb520ebd61208d0425af4e9371028a36449100bfd00971e56",
@@ -30488,6 +30488,10 @@
       "bytes": 456213,
       "sha256": "ce5f0e855fe8b59e71652e616c804d5a6f39ed206f34b9fbd3613bc9261a43ae"
     },
+    "strategy_lab/results/20261104_051853_V3_SAFE_CHANNEL_Z_W32_T1P0_M_PRICE_DIRECTION_6H_BROAD_V1.json": {
+      "bytes": 455493,
+      "sha256": "6a32979b21ed3403b7f3350a08bb19a5bbc2d4c9cfa9cfad64494546b0d8b0f0"
+    },
     "strategy_lab/results/v3/auto_runtime_release_state.json": {
       "bytes": 156,
       "sha256": "c60ed9ec2ddec7cd3e2de4089628774080d307f198fc6fda28ac528a50547feb"
@@ -32894,15 +32898,15 @@
     },
     "strategy_lab/results/v3/historical_314_pipeline_stage2.json": {
       "bytes": 4550357,
-      "sha256": "f9aaef1b3729b5213974311ae9640c85ef2cef204643b4ea955495253e962169"
+      "sha256": "3ca6a8ac96b288498e76c8bf8a9cbcaab4b516f95bde8f488ae27326174468fa"
     },
     "strategy_lab/results/v3/individual_reentry_final_risk_stage4.json": {
       "bytes": 5767490,
       "sha256": "9096aec18256e472a185ffc8207a218a969280d819370001100523e11bee99cd"
     },
     "strategy_lab/results/v3/individual_trailing_stage3.json": {
-      "bytes": 7832460,
-      "sha256": "c1edb6641c63febddc5895257edf731356c5ac85f95b0fd27902d4859aadbaf6"
+      "bytes": 7833573,
+      "sha256": "f93a8f15254acfdfe341d9c541bb56732e6a7572492ef164c7cdeb4f1c3afae2"
     },
     "strategy_lab/results/v3/redeveloped_strategies/v3_adaptive_channel_rfull_validation_1.py": {
       "bytes": 2954,
@@ -33097,8 +33101,8 @@
       "sha256": "bdafa9fa92a9079bd95277cb54719aad01326c5eb7ca7a40c872f0e94294b818"
     },
     "strategy_lab/results/v3/roadmap_queue.json": {
-      "bytes": 385968,
-      "sha256": "e569e92f841d1fc21d28ec34acab87c46da98e294a57bf94a237b17ef886243b"
+      "bytes": 385970,
+      "sha256": "61fc6b865596df770e9aa66b5bbe9b480f862740a87d021e8f32c8b12b685233"
     },
     "strategy_lab/results/v3/runtime_diagnostics.json": {
       "bytes": 9457,
@@ -33109,13 +33113,13 @@
       "sha256": "4af688ba550a2f6767ff5e8b29cfa5d98fc28f4c4af2b263ad92338f91ba82f7"
     },
     "strategy_lab/results/v3/trial_ledger.json": {
-      "bytes": 4998542,
-      "sha256": "d391a018280e76dc4ee6fc591bf2f991a4315a2786f578a42071ef1ca699b312"
+      "bytes": 4999257,
+      "sha256": "e9610084fef4c188c7af0710d37a5a74aa977fd5aacfc062ac12cf4374eb47c8"
     }
   },
   "p0_stage_status": {
     "schema": "B_BOT_P0_CHECKPOINT_STAGE_SNAPSHOT_V1",
-    "pipeline_sha256": "f9aaef1b3729b5213974311ae9640c85ef2cef204643b4ea955495253e962169",
+    "pipeline_sha256": "3ca6a8ac96b288498e76c8bf8a9cbcaab4b516f95bde8f488ae27326174468fa",
     "aws_final_certification": "NOT_VERIFIED_BY_GITHUB_RESEARCH",
     "automatic_registration_authorized": false,
     "leading_exact_version": "EV_55a86e97dfadf81c_30M",
@@ -33157,14 +33161,14 @@
       }
     },
     "trailing_blocker_diagnostics": {
-      "source_stage2_sha256": "f9aaef1b3729b5213974311ae9640c85ef2cef204643b4ea955495253e962169",
-      "source_stage3_sha256": "c1edb6641c63febddc5895257edf731356c5ac85f95b0fd27902d4859aadbaf6",
+      "source_stage2_sha256": "3ca6a8ac96b288498e76c8bf8a9cbcaab4b516f95bde8f488ae27326174468fa",
+      "source_stage3_sha256": "f93a8f15254acfdfe341d9c541bb56732e6a7572492ef164c7cdeb4f1c3afae2",
       "status": "RESEARCH_BLOCKER_COUNTS_ONLY",
       "reasons": {
         "OTHER_OR_UNRECORDED": 51
       }
     }
   },
-  "archive_sha256": "254b9f88fe95c992c5b085924c0ff3a1c7c9302a93227eb7b084728645f3bede",
+  "archive_sha256": "14dd9402a7f94a9672c08d6027b714917a26d346738fa04861bcefab8dc29609",
   "public_secret_scan": "PASS"
 }
