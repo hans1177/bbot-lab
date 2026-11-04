@@ -3161,9 +3161,25 @@ def _make_prior_signal_confirmation_source(target,gate,cycle):
     text=source.read_text(encoding="utf-8-sig",errors="strict")
     bars=int(cycle)
     name=f"{str(target.get('strategy_id') or '').upper()}_R{gate}_{cycle}"
-    code=f"""# -*- coding: utf-8 -*-\n# PORTABLE_TARGETED_REDEVELOPMENT_V1\n# Failure-related bounded prior-signal confirmation only.\nimport sys,types,numpy as np\n_SRC={text!r}\n_mod=types.ModuleType("_bbot_redev_parent")\n_mod.__file__="<embedded:redev_parent>"\nsys.modules[_mod.__name__]=_mod\nexec(compile(_SRC,_mod.__file__,"exec"),_mod.__dict__)\nSTRATEGY_META=dict(getattr(_mod,"STRATEGY_META",{{}}))\nSTRATEGY_META["name"]={name!r}\nSTRATEGY_META["redevelopment_gate"]={gate!r}\nSTRATEGY_META["redevelopment_cycle"]={cycle!r}\nSTRATEGY_META["prior_signal_confirmation_bars"]={bars!r}\ndef generate_signals(df,tf):\n    raw=np.asarray(_mod.generate_signals(df,tf),dtype=np.int8)\n    out=np.zeros(len(raw),dtype=np.int8)\n    if len(raw)==0:return out\n    ok=(raw!=0)\n    for lag in range(1,{bars!r}+1):\n        shifted=np.zeros(len(raw),dtype=np.int8)\n        shifted[lag:]=raw[:-lag]\n        ok &= (shifted==raw)\n    out[ok]=raw[ok]\n    return out\ndef signal(df,params=None):\n    z=generate_signals(df,"LIVE")\n    v=int(z[-1]) if len(z) else 0\n    return {{"signal":"long" if v>0 else "short" if v<0 else "wait","state":"long" if v>0 else "short" if v<0 else "wait","strength_long":1.0 if v>0 else 0.0,"strength_short":1.0 if v<0 else 0.0,"reason":STRATEGY_META.get("name","")}}\n"""
+    # FULL_VALIDATION variations are new immutable exact-version sources.
+    # A parent-source fingerprint prevents collisions with existing frozen files.
+    if gate=="FULL_VALIDATION":
+        name+="_REGIME_"+hashlib.sha256(text.encode("utf-8")).hexdigest()[:10].upper()
+    regime_line=(
+        "    ema=df['close'].astype(float).ewm(span=12,adjust=False).mean()\n"
+        "    regime_slope=ema.diff(3).to_numpy(dtype=float)\n"
+        "    ok &= np.where(raw>0,regime_slope>0,regime_slope<0)\n"
+    ) if gate=="FULL_VALIDATION" else ""
+    code=f"""# -*- coding: utf-8 -*-\n# PORTABLE_TARGETED_REDEVELOPMENT_V1\n# Failure-related bounded prior-signal confirmation only.\nimport sys,types,numpy as np\n_SRC={text!r}\n_mod=types.ModuleType("_bbot_redev_parent")\n_mod.__file__="<embedded:redev_parent>"\nsys.modules[_mod.__name__]=_mod\nexec(compile(_SRC,_mod.__file__,"exec"),_mod.__dict__)\nSTRATEGY_META=dict(getattr(_mod,"STRATEGY_META",{{}}))\nSTRATEGY_META["name"]={name!r}\nSTRATEGY_META["redevelopment_gate"]={gate!r}\nSTRATEGY_META["redevelopment_cycle"]={cycle!r}\nSTRATEGY_META["prior_signal_confirmation_bars"]={bars!r}\ndef generate_signals(df,tf):\n    raw=np.asarray(_mod.generate_signals(df,tf),dtype=np.int8)\n    out=np.zeros(len(raw),dtype=np.int8)\n    if len(raw)==0:return out\n    ok=(raw!=0)\n    for lag in range(1,{bars!r}+1):\n        shifted=np.zeros(len(raw),dtype=np.int8)\n        shifted[lag:]=raw[:-lag]\n        ok &= (shifted==raw)\n{regime_line}    out[ok]=raw[ok]\n    return out\ndef signal(df,params=None):\n    z=generate_signals(df,"LIVE")\n    v=int(z[-1]) if len(z) else 0\n    return {{"signal":"long" if v>0 else "short" if v<0 else "wait","state":"long" if v>0 else "short" if v<0 else "wait","strength_long":1.0 if v>0 else 0.0,"strength_short":1.0 if v<0 else 0.0,"reason":STRATEGY_META.get("name","")}}\n"""
     REDEVELOPED.mkdir(parents=True,exist_ok=True)
-    out=REDEVELOPED/(name.lower()+".py"); compile(code,str(out),"exec"); out.write_text(code,encoding="utf-8")
+    out=REDEVELOPED/(name.lower()+".py"); compile(code,str(out),"exec")
+    # Never mutate an older exact version's research source.
+    if out.exists():
+        if out.read_text(encoding="utf-8-sig")!=code:
+            raise RuntimeError("FROZEN_STRATEGY_SOURCE_CONFLICT")
+    else:
+        with out.open("x",encoding="utf-8",newline="\n") as f:
+            f.write(code)
     return out,""
 
 
@@ -3211,7 +3227,10 @@ def run_targeted_redevelopment_one():
         if new_source is None:
             target["pipeline_stage"]="PERSISTENT_FAIL"; target["last_error"]="NO_FAILURE_RELATED_MUTATION_CONTRACT:"+err; _save_historical_stage2(state)
             return {"status":"PERSISTENT_FAIL","gate":gate,"reason":"NO_FAILURE_RELATED_MUTATION_CONTRACT","automatic_promotion":False}
-        source_sha=_sha256_file(new_source); method="PRIOR_SIGNAL_CONFIRMATION"; extra=f"confirm={cycle}"
+        source_sha=_sha256_file(new_source)
+        method=("PRIOR_SIGNAL_CONFIRMATION_CAUSAL_REGIME" if gate=="FULL_VALIDATION"
+                else "PRIOR_SIGNAL_CONFIRMATION")
+        extra=f"confirm={cycle}"+("|ema12_slope3=CAUSAL" if gate=="FULL_VALIDATION" else "")
     elif gate=="FINAL_RISK_REVALIDATION":
         alts=list(target.get("redevelopment_trailing_alternatives") or [])
         if not alts: alts=_conservative_trailing_alternatives(target)
