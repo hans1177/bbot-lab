@@ -1,8 +1,8 @@
 {
   "schema": "B_BOT_RESEARCH_CHECKPOINT_V1",
   "release_contract": "FINAL_GATES_THEN_EXISTING_RUNTIME_WORKER_V1",
-  "source_run_id": "41778280604",
-  "source_commit": "90809be192de28eb20e36a2baaf481ea64839611",
+  "source_run_id": "41866543337",
+  "source_commit": "5b283c9123de820b48bf0c294046d200a13e5de4",
   "engine_sha256": "3c665f886a02757e3b35444b437312385d88790c47c6346e90c64dfc0a5a86ed",
   "input_archives": {
     "start.zip": "ace276261e768dbcb520ebd61208d0425af4e9371028a36449100bfd00971e56",
@@ -38105,8 +38105,8 @@
       "sha256": "a96015555e88a24106cc6ed5ae8dd8f2b0aea4eca6b5dc518e2ffd3ab403eeef"
     },
     "strategy_lab/results/v3/historical_314_pipeline_stage2.json": {
-      "bytes": 5232103,
-      "sha256": "056a01c83664f1460821e3bdcab0473e868ae8a5d85b5fec6d5327f8bf93e4ea"
+      "bytes": 5234825,
+      "sha256": "c5aae6eef5c8dd1beb216ec7e8b0004b8ae35e9c9540e78ce4b70fbe91a35df7"
     },
     "strategy_lab/results/v3/individual_reentry_final_risk_stage4.json": {
       "bytes": 6879126,
@@ -38317,8 +38317,8 @@
       "sha256": "c658c00adf73bd06f11253de7496fa117816d1e3689893c36cbc05135a28cf10"
     },
     "strategy_lab/results/v3/roadmap_queue.json": {
-      "bytes": 386216,
-      "sha256": "ace69cb4ce4a9df7de9af42c29d890b143d2f25d873965cd737f9e6a673bcd70"
+      "bytes": 386231,
+      "sha256": "37431d38eaa0a7424758b7c753221c2c62fd79827cbedcc6a08413212aa318ef"
     },
     "strategy_lab/results/v3/runtime_diagnostics.json": {
       "bytes": 9457,
@@ -38335,7 +38335,7 @@
   },
   "p0_stage_status": {
     "schema": "B_BOT_P0_CHECKPOINT_STAGE_SNAPSHOT_V1",
-    "pipeline_sha256": "056a01c83664f1460821e3bdcab0473e868ae8a5d85b5fec6d5327f8bf93e4ea",
+    "pipeline_sha256": "c5aae6eef5c8dd1beb216ec7e8b0004b8ae35e9c9540e78ce4b70fbe91a35df7",
     "aws_final_certification": "NOT_VERIFIED_BY_GITHUB_RESEARCH",
     "automatic_registration_authorized": false,
     "leading_exact_version": "EV_55a86e97dfadf81c_30M",
@@ -38343,8 +38343,7 @@
     "status": "RESEARCH_STAGE_ONLY",
     "stage_counts": {
       "HARD_PASS_RECHECK_FAIL": 35,
-      "HARD_PASS_RECHECK_PENDING": 1,
-      "INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING": 32,
+      "INDIVIDUAL_TRAILING_OPTIMIZATION_PENDING": 33,
       "INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE": 65,
       "PERSISTENT_FAIL": 75,
       "REDEVELOPMENT_SUPERSEDED_BY_NEW_VERSION": 304
@@ -38378,14 +38377,20 @@
       }
     },
     "trailing_blocker_diagnostics": {
-      "source_stage2_sha256": "056a01c83664f1460821e3bdcab0473e868ae8a5d85b5fec6d5327f8bf93e4ea",
+      "source_stage2_sha256": "c5aae6eef5c8dd1beb216ec7e8b0004b8ae35e9c9540e78ce4b70fbe91a35df7",
       "source_stage3_sha256": "eb4fcd439320ffaebeb008e126a148674c8318a435f1bb8f6686ebe0fc499a7b",
       "status": "RESEARCH_BLOCKER_COUNTS_ONLY",
       "reasons": {
-        "OTHER_OR_UNRECORDED": 65
+        "INVALID_BASELINE_NO_ROBUST_VALID_ALTERNATIVE": 65
+      },
+      "failure_families": {
+        "BASELINE_OR_ROBUST_ALTERNATIVE_MISSING": 65
+      },
+      "reason_sources": {
+        "PIPELINE": 65
       }
     }
   },
-  "archive_sha256": "631f082c0673213a53a72ce49af5cfe03b56bb325ec2e5024456b13231b4affa",
+  "archive_sha256": "03a06ed3ca5bf0b9c6630125e61d0c4a3868667944fb477ac219c0da5767d19e",
   "public_secret_scan": "PASS"
 }
