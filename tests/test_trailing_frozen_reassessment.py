@@ -1,6 +1,11 @@
 """Frozen trailing reassessment must be one-shot, read-only to trial evidence."""
 import ast
+import hashlib
+import runpy
+import tempfile
 import unittest
+import numpy as np
+import pandas as pd
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -82,6 +87,62 @@ class FrozenTrailingReassessmentTests(unittest.TestCase):
         self.assertNotIn("reserve_trial",calls)
         self.assertNotIn("run_strategy",calls)
         self.assertNotIn("publish_cloud_checkpoint",calls)
+
+class CausalRegimeRedevelopmentTests(unittest.TestCase):
+    def setUp(self):
+        tmp=tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root=Path(tmp.name)
+        (self.root/"parent.py").write_text(
+            "import numpy as np\n"
+            "STRATEGY_META={'name':'TEST_PARENT'}\n"
+            "def generate_signals(df,tf):\n"
+            "    return np.ones(len(df),dtype=np.int8)\n",encoding="utf-8")
+        nodes=[node for node in ast.parse(SOURCE.read_text()).body
+               if isinstance(node,ast.FunctionDef)
+               and node.name=="_make_prior_signal_confirmation_source"]
+        self.assertEqual(len(nodes),1)
+        ns={"ROOT":self.root,"REDEVELOPED":self.root/"redeveloped",
+            "hashlib":hashlib}
+        exec(compile(ast.Module(body=nodes,type_ignores=[]),
+                     str(SOURCE),"exec"),ns)
+        self.generate=ns["_make_prior_signal_confirmation_source"]
+        self.target={"canonical_source_file":"parent.py",
+                     "strategy_id":"TEST_PARENT"}
+
+    def test_new_final_validation_filter_uses_only_closed_bar_history(self):
+        output,error=self.generate(self.target,"FULL_VALIDATION",1)
+        self.assertEqual(error,"")
+        self.assertIn("_regime_",output.name)
+        module=runpy.run_path(str(output))
+        close=np.concatenate([np.linspace(120,80,60),np.linspace(80,140,60)])
+        frame=pd.DataFrame({"close":close})
+        signals=module["generate_signals"](frame,"1H")
+        self.assertEqual(int(signals[45]),0)
+        self.assertEqual(int(signals[110]),1)
+        for length in (30,65,88,115):
+            np.testing.assert_array_equal(
+                signals[:length],
+                module["generate_signals"](frame.iloc[:length],"1H"))
+        # Entry-risk redevelopment remains the original confirmation-only path.
+        original,error=self.generate(self.target,"ENTRY_RISK",1)
+        self.assertEqual(error,"")
+        self.assertNotIn("_regime_",original.name)
+        legacy=runpy.run_path(str(original))["generate_signals"](frame,"1H")
+        self.assertEqual(int(legacy[45]),1)
+        self.assertEqual(int(legacy[110]),1)
+
+    def test_frozen_redevelopment_source_never_overwritten(self):
+        original,_=self.generate(self.target,"FULL_VALIDATION",1)
+        before=original.read_bytes()
+        same,_=self.generate(self.target,"FULL_VALIDATION",1)
+        self.assertEqual(original,same)
+        self.assertEqual(original.read_bytes(),before)
+        original.write_text("# frozen content differs",encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError,"FROZEN_STRATEGY_SOURCE_CONFLICT"):
+            self.generate(self.target,"FULL_VALIDATION",1)
+        self.assertEqual(original.read_text(encoding="utf-8"),"# frozen content differs")
+
 
 if __name__=="__main__":
     unittest.main()
