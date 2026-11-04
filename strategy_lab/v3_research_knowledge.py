@@ -324,8 +324,9 @@ def _p0_checkpoint_trailing_blockers(pipeline, stage3):
         'TRAILING_FROZEN_EVIDENCE_MISMATCH','TRAILING_FROZEN_RESEARCH_WINDOW_INVALID',
         'BASELINE_3_0_1_5_NOT_MEASURED_OR_INVALID',
         'TRAILING_SELECTION_INCOMPLETE','NO_ROBUST_MULTI_METRIC_IMPROVEMENT',
+        'INVALID_BASELINE_NO_ROBUST_VALID_ALTERNATIVE',
     }
-    blocked=Counter()
+    blocked=Counter(); families=Counter(); origins=Counter()
     for row in entries:
         if not isinstance(row,dict) or row.get('eligible') is not True:
             continue
@@ -336,12 +337,35 @@ def _p0_checkpoint_trailing_blockers(pipeline, stage3):
         item=item if isinstance(item,dict) else {}
         selection=item.get('selection') or {}
         if not isinstance(selection,dict):selection={}
-        reason=(row.get('last_error') or item.get('runtime_error')
-                or item.get('source_integrity_error') or selection.get('reason'))
-        category=str(reason) if isinstance(reason,str) and reason in safe_codes else 'OTHER_OR_UNRECORDED'
-        blocked[category]+=1
-    return {'status':'RESEARCH_BLOCKER_COUNTS_ONLY','reasons':dict(sorted(blocked.items()))}
-
+        evidence=[
+            ('PIPELINE',row.get('last_error')),
+            ('RUNTIME',item.get('runtime_error')),
+            ('SOURCE',item.get('source_integrity_error')),
+            ('SELECTION',selection.get('reason')),
+        ]
+        observed=[(src,code) for src,code in evidence if isinstance(code,str) and code.strip()]
+        source,reason=next(((src,code) for src,code in observed if code in safe_codes),
+                           observed[0] if observed else ('NONE',None))
+        code=reason if reason in safe_codes else 'OTHER_OR_UNRECORDED'
+        blocked[code]+=1; origins[source]+=1
+        if code in {'INVALID_BASELINE_NO_ROBUST_VALID_ALTERNATIVE',
+                    'BASELINE_3_0_1_5_NOT_MEASURED_OR_INVALID'}:
+            family='BASELINE_OR_ROBUST_ALTERNATIVE_MISSING'
+        elif code=='NO_ROBUST_MULTI_METRIC_IMPROVEMENT':
+            family='NO_STABLE_NEIGHBOR_IMPROVEMENT'
+        elif code in {'RUN_STRATEGY_FAIL','RESULT_NOT_FOUND','TRAILING_RUN_TIMEOUT'}:
+            family='CALCULATION_OR_RESULT_FAILURE'
+        elif code.startswith('TRAILING_') and code!='TRAILING_SELECTION_INCOMPLETE':
+            family='DATA_SOURCE_OR_FROZEN_EVIDENCE_FAILURE'
+        elif code=='TRAILING_SELECTION_INCOMPLETE':
+            family='SELECTION_INCOMPLETE'
+        else:
+            family='NO_STRUCTURED_REASON' if source=='NONE' else 'UNRECOGNIZED_RECORDED_REASON'
+        families[family]+=1
+    return {'status':'RESEARCH_BLOCKER_COUNTS_ONLY',
+            'reasons':dict(sorted(blocked.items())),
+            'failure_families':dict(sorted(families.items())),
+            'reason_sources':dict(sorted(origins.items()))}
 
 def save_cloud_checkpoint():
     import sys
