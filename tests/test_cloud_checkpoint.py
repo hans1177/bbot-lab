@@ -66,6 +66,35 @@ class CloudCheckpointTests(unittest.TestCase):
                     hashlib.sha256(archive.read('strategy_lab/results/v3/'+name)).hexdigest(),
                     stats[sha])
 
+    def test_known_invalid_baseline_has_actionable_safe_reason(self):
+        (self.state/'historical_314_pipeline_stage2.json').write_text(json.dumps({
+            'entries':[
+                {'eligible':True,'pipeline_stage':'INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE',
+                 'canonical_identity_key':'a',
+                 'last_error':'INVALID_BASELINE_NO_ROBUST_VALID_ALTERNATIVE'},
+                {'eligible':True,'pipeline_stage':'INDIVIDUAL_TRAILING_RESEARCH_INCOMPLETE',
+                 'canonical_identity_key':'b','last_error':'private sensitive details'},
+            ]}))
+        (self.state/'individual_trailing_stage3.json').write_text(json.dumps({
+            'entries':{
+                'a':{'selection':{'reason':'INVALID_BASELINE_NO_ROBUST_VALID_ALTERNATIVE'}},
+                'b':{'runtime_error':'RUN_STRATEGY_FAIL'},
+            }}))
+        self.run_step('Preserve research checkpoint')
+        receipt=json.loads((self.base/'research-checkpoint-out/CHECKPOINT.json').read_text())
+        stats=receipt['p0_stage_status']['trailing_blocker_diagnostics']
+        self.assertEqual(stats['reasons'],{
+            'INVALID_BASELINE_NO_ROBUST_VALID_ALTERNATIVE':1,
+            'RUN_STRATEGY_FAIL':1,
+        })
+        self.assertEqual(stats['failure_families'],{
+            'BASELINE_OR_ROBUST_ALTERNATIVE_MISSING':1,
+            'CALCULATION_OR_RESULT_FAILURE':1,
+        })
+        self.assertEqual(stats['reason_sources'],{'PIPELINE':1,'RUNTIME':1})
+        self.assertNotIn('private sensitive details',json.dumps(stats))
+        self.assertNotIn('canonical_identity_key',json.dumps(stats))
+
     def test_checkpoint_capacity_matches_publisher_and_restorer(self):
         # Keep original V1 filenames, hashes and legacy 64-part restore compatibility.
         source=(REPO/'strategy_lab/v3_research_knowledge.py').read_text()
